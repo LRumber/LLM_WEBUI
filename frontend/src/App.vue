@@ -33,12 +33,31 @@ interface ModelInfo {
 }
 
 interface StreamEvent {
-  type: 'delta' | 'usage' | 'done' | 'error'
+  type: 'metadata' | 'delta' | 'usage' | 'done' | 'error'
   content?: string
   message?: string
+  conversation_id?: string
+  message_id?: string
   prompt_tokens?: number
   completion_tokens?: number
   total_tokens?: number
+}
+
+interface ConversationSummary {
+  id: string
+  title: string
+  model: string
+  messageCount: number
+  preview: string
+  updatedAt: string
+}
+
+interface PersistedMessage {
+  role: Role
+  content: string
+  status: string
+  inputTokens: number
+  outputTokens: number
 }
 
 const isWorkspace = computed(() => window.location.pathname.startsWith('/app'))
@@ -47,6 +66,8 @@ const models = ref<ModelInfo[]>([])
 const selectedModel = ref('deepseek-chat')
 const sidebarOpen = ref(false)
 const messages = ref<ChatMessage[]>([])
+const conversations = ref<ConversationSummary[]>([])
+const conversationId = ref<string | null>(null)
 const isGenerating = ref(false)
 const usage = ref({ prompt: 0, completion: 0, total: 0 })
 const conversationArea = ref<HTMLElement | null>(null)
@@ -62,7 +83,7 @@ const login = () => {
 
 const loadModels = async () => {
   try {
-    const response = await fetch('/ai/v1/models')
+    const response = await fetch('/api/models')
     if (!response.ok) return
     models.value = await response.json()
     if (models.value.length && !models.value.some((model) => model.key === selectedModel.value)) {
@@ -73,6 +94,41 @@ const loadModels = async () => {
   }
 }
 
+const loadConversations = async () => {
+  try {
+    const response = await fetch('/api/conversations')
+    if (response.ok) conversations.value = await response.json()
+  } catch {
+    conversations.value = []
+  }
+}
+
+const openConversation = async (conversation: ConversationSummary) => {
+  if (isGenerating.value) return
+  const response = await fetch(`/api/conversations/${conversation.id}/messages`)
+  if (!response.ok) return
+  const persisted: PersistedMessage[] = await response.json()
+  conversationId.value = conversation.id
+  selectedModel.value = conversation.model
+  messages.value = persisted
+    .filter((message) => message.content)
+    .map((message) => ({
+      role: message.role,
+      content: message.content,
+      error: message.status === 'failed',
+    }))
+  const lastAssistant = [...persisted].reverse().find((message) => message.role === 'assistant')
+  usage.value = lastAssistant
+    ? {
+        prompt: lastAssistant.inputTokens,
+        completion: lastAssistant.outputTokens,
+        total: lastAssistant.inputTokens + lastAssistant.outputTokens,
+      }
+    : { prompt: 0, completion: 0, total: 0 }
+  sidebarOpen.value = false
+  await scrollToBottom()
+}
+
 const scrollToBottom = async () => {
   await nextTick()
   if (conversationArea.value) {
@@ -80,7 +136,11 @@ const scrollToBottom = async () => {
   }
 }
 
-const applyStreamEvent = (event: StreamEvent, assistant: ChatMessage) => {
+const applyStreamEvent = (event: StreamEvent, assistantIndex: number) => {
+  const assistant = messages.value[assistantIndex]
+  if (event.type === 'metadata' && event.conversation_id) {
+    conversationId.value = event.conversation_id
+  }
   if (event.type === 'delta' && event.content) {
     assistant.content += event.content
     scrollToBottom()
@@ -96,7 +156,7 @@ const applyStreamEvent = (event: StreamEvent, assistant: ChatMessage) => {
   }
 }
 
-const consumeEventStream = async (response: Response, assistant: ChatMessage) => {
+const consumeEventStream = async (response: Response, assistantIndex: number) => {
   if (!response.body) throw new Error('浏览器不支持流式响应')
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -112,7 +172,7 @@ const consumeEventStream = async (response: Response, assistant: ChatMessage) =>
     for (const block of blocks) {
       const dataLine = block.split('\n').find((line) => line.startsWith('data:'))
       if (!dataLine) continue
-      applyStreamEvent(JSON.parse(dataLine.slice(5).trim()), assistant)
+      applyStreamEvent(JSON.parse(dataLine.slice(5).trim()), assistantIndex)
     }
   }
 }
@@ -124,6 +184,7 @@ const sendPrompt = async (preset?: string) => {
   const userMessage: ChatMessage = { role: 'user', content }
   const assistantMessage: ChatMessage = { role: 'assistant', content: '' }
   messages.value.push(userMessage, assistantMessage)
+  const assistantIndex = messages.value.length - 1
   prompt.value = ''
   usage.value = { prompt: 0, completion: 0, total: 0 }
   isGenerating.value = true
@@ -131,28 +192,36 @@ const sendPrompt = async (preset?: string) => {
   await scrollToBottom()
 
   try {
-    const requestMessages = messages.value
-      .filter((message) => message !== assistantMessage)
-      .map(({ role, content: messageContent }) => ({ role, content: messageContent }))
-
-    const response = await fetch('/ai/v1/chat/stream', {
+    const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: selectedModel.value, messages: requestMessages }),
+      body: JSON.stringify({
+        conversationId: conversationId.value,
+        model: selectedModel.value,
+        content,
+      }),
       signal: abortController.signal,
     })
-    if (!response.ok) throw new Error(`请求失败（${response.status}）`)
-    await consumeEventStream(response, assistantMessage)
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => null)
+      const detail = Array.isArray(errorBody?.detail)
+        ? errorBody.detail.map((item: { msg?: string }) => item.msg).filter(Boolean).join('；')
+        : errorBody?.detail
+      throw new Error(detail || `请求失败（${response.status}）`)
+    }
+    await consumeEventStream(response, assistantIndex)
   } catch (error) {
+    const assistant = messages.value[assistantIndex]
     if ((error as Error).name === 'AbortError') {
-      if (!assistantMessage.content) assistantMessage.content = '已停止生成。'
+      if (!assistant.content) assistant.content = '已停止生成。'
     } else {
-      assistantMessage.error = true
-      assistantMessage.content = (error as Error).message || '无法连接 AI 服务。'
+      assistant.error = true
+      assistant.content = (error as Error).message || '无法连接后端服务。'
     }
   } finally {
     isGenerating.value = false
     abortController = null
+    await loadConversations()
     await scrollToBottom()
   }
 }
@@ -162,6 +231,7 @@ const stopGeneration = () => abortController?.abort()
 const newConversation = () => {
   abortController?.abort()
   messages.value = []
+  conversationId.value = null
   prompt.value = ''
   usage.value = { prompt: 0, completion: 0, total: 0 }
 }
@@ -174,7 +244,10 @@ const handleComposerKeydown = (event: KeyboardEvent) => {
 }
 
 onMounted(() => {
-  if (isWorkspace.value) loadModels()
+  if (isWorkspace.value) {
+    loadModels()
+    loadConversations()
+  }
 })
 </script>
 
@@ -217,8 +290,18 @@ onMounted(() => {
           <span>当前会话</span>
           <button class="icon-button" title="搜索对话"><Search :size="16" /></button>
         </div>
-        <button v-if="messages.length" class="history-item active-history" type="button">未命名对话</button>
-        <p v-else class="history-empty">暂无对话</p>
+        <button
+          v-for="conversation in conversations"
+          :key="conversation.id"
+          class="history-item"
+          :class="{ 'active-history': conversation.id === conversationId }"
+          type="button"
+          :title="conversation.preview"
+          @click="openConversation(conversation)"
+        >
+          {{ conversation.title || '未命名对话' }}
+        </button>
+        <p v-if="!conversations.length" class="history-empty">暂无对话</p>
       </div>
 
       <div class="sidebar-footer">

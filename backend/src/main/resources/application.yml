@@ -8,6 +8,9 @@ server:
         secure: ${SESSION_COOKIE_SECURE:false}
 
 spring:
+  mvc:
+    async:
+      request-timeout: 180000
   application:
     name: lm-platform-backend
   datasource:
@@ -27,6 +30,7 @@ platform:
     redirect-uri: ${OAUTH2_REDIRECT_URI:http://localhost:8080/api/auth/oauth2/callback}
   ai-service:
     base-url: ${AI_SERVICE_BASE_URL:http://localhost:8001}
+    timeout-seconds: ${AI_SERVICE_TIMEOUT_SECONDS:150}
 
 management:
   endpoints:

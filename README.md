@@ -84,13 +84,23 @@ LM_web/
 
 Token 与登录统计采用“原始事件流水 + 每日聚合表”。原始流水用于审计，聚合表用于后台报表查询。
 
+对话请求采用以下持久化链路：
+
+```text
+Vue -> Spring Boot -> PostgreSQL
+          |
+          `-> FastAPI -> DeepSeek / vLLM
+```
+
+Spring Boot 创建会话并保存用户消息，从 PostgreSQL 加载历史上下文，再将 FastAPI 的 SSE 增量逐块转发给前端。生成完成后保存助手消息、Token、响应耗时和每日用量汇总。
+
 ## 第一阶段范围
 
 - [x] 项目结构与架构约定
 - [ ] OAuth2 登录及影子用户同步
 - [ ] RBAC 与团队管理
 - [x] DeepSeek 模型注册、切换和流式对话
-- [ ] Token、每日对话和登录统计
+- [x] 对话消息、Token 和每日用量持久化
 - [ ] 文件上传及对象存储
 - [ ] 基础管理后台
 
@@ -108,6 +118,8 @@ cd frontend && npm run dev
 ```
 
 默认端口：前端 `5173`，核心后端 `8080`，AI 服务 `8001`。
+
+本地 PostgreSQL 需要预先创建 `lm_platform` 数据库和同名登录用户，并确保根目录 `.env` 中的 `DATABASE_URL`、`POSTGRES_USER`、`POSTGRES_PASSWORD` 与实际配置一致。Spring Boot 启动时通过 Flyway 自动创建和升级表结构。
 
 ### DeepSeek 对话
 

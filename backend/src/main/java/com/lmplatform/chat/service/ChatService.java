@@ -20,15 +20,18 @@ public class ChatService {
     private final ConversationRepository repository;
     private final AiServiceClient aiServiceClient;
     private final ObjectMapper objectMapper;
+    private final TitleGenerationService titleGenerationService;
 
     public ChatService(
             ConversationRepository repository,
             AiServiceClient aiServiceClient,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            TitleGenerationService titleGenerationService
     ) {
         this.repository = repository;
         this.aiServiceClient = aiServiceClient;
         this.objectMapper = objectMapper;
+        this.titleGenerationService = titleGenerationService;
     }
 
     public void stream(ChatStreamRequest request, OutputStream output) throws IOException {
@@ -87,6 +90,15 @@ public class ChatService {
                     durationMs,
                     newConversation
             );
+            if (newConversation) {
+                // Run after persistence and off the request thread so title generation never delays SSE completion.
+                titleGenerationService.generateAsync(
+                        conversationId,
+                        userId,
+                        request.content(),
+                        assistantContent.toString()
+                );
+            }
         } catch (IOException exception) {
             String status = assistantContent.isEmpty() ? "failed" : "interrupted";
             repository.finishAssistantMessage(

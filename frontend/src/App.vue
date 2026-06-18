@@ -16,6 +16,7 @@ import {
   Mic,
   PanelLeftClose,
   Paperclip,
+  Pencil,
   Search,
   Send,
   Settings,
@@ -80,6 +81,8 @@ const conversationArea = ref<HTMLElement | null>(null)
 const promptInput = ref<HTMLTextAreaElement | null>(null)
 const copiedMessageIndex = ref<number | null>(null)
 const serviceOnline = ref(false)
+const editingConversationId = ref<string | null>(null)
+const editingTitle = ref('')
 let abortController: AbortController | null = null
 
 marked.setOptions({ gfm: true, breaks: true })
@@ -135,6 +138,12 @@ const loadConversations = async () => {
   }
 }
 
+const scheduleTitleRefresh = () => {
+  // Title generation runs asynchronously after the first answer is persisted.
+  const refreshDelays = [1500, 4000, 8000]
+  refreshDelays.forEach((delay) => window.setTimeout(loadConversations, delay))
+}
+
 const openConversation = async (conversation: ConversationSummary) => {
   if (isGenerating.value) return
   const response = await fetch(`/api/conversations/${conversation.id}/messages`)
@@ -159,6 +168,31 @@ const openConversation = async (conversation: ConversationSummary) => {
     : { prompt: 0, completion: 0, total: 0 }
   sidebarOpen.value = false
   await scrollToBottom()
+}
+
+const startRename = (conversation: ConversationSummary) => {
+  editingConversationId.value = conversation.id
+  editingTitle.value = conversation.title
+}
+
+const cancelRename = () => {
+  editingConversationId.value = null
+  editingTitle.value = ''
+}
+
+const saveRename = async () => {
+  const id = editingConversationId.value
+  const title = editingTitle.value.trim()
+  if (!id) return
+  cancelRename()
+  if (!title) return
+
+  const response = await fetch(`/api/conversations/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+  if (response.ok) await loadConversations()
 }
 
 const scrollToBottom = async () => {
@@ -212,6 +246,7 @@ const consumeEventStream = async (response: Response, assistantIndex: number) =>
 const sendPrompt = async (preset?: string) => {
   const content = (preset ?? prompt.value).trim()
   if (!content || isGenerating.value) return
+  const isFirstMessage = conversationId.value === null
 
   const userMessage: ChatMessage = { role: 'user', content }
   const assistantMessage: ChatMessage = { role: 'assistant', content: '' }
@@ -256,6 +291,7 @@ const sendPrompt = async (preset?: string) => {
     isGenerating.value = false
     abortController = null
     await loadConversations()
+    if (isFirstMessage) scheduleTitleRefresh()
     await scrollToBottom()
   }
 }
@@ -326,17 +362,37 @@ onMounted(() => {
           <span>最近</span>
           <button class="icon-button" title="搜索对话"><Search :size="16" /></button>
         </div>
-        <button
+        <div
           v-for="conversation in conversations"
           :key="conversation.id"
-          class="history-item"
+          class="history-row"
           :class="{ 'active-history': conversation.id === conversationId }"
-          type="button"
-          :title="conversation.preview"
-          @click="openConversation(conversation)"
         >
-          {{ conversation.title || '未命名对话' }}
-        </button>
+          <input
+            v-if="editingConversationId === conversation.id"
+            v-model="editingTitle"
+            class="history-rename-input"
+            maxlength="60"
+            autofocus
+            @click.stop
+            @keydown.enter.prevent="saveRename"
+            @keydown.esc.prevent="cancelRename"
+            @blur="saveRename"
+          />
+          <template v-else>
+            <button
+              class="history-item"
+              type="button"
+              :title="conversation.preview"
+              @click="openConversation(conversation)"
+            >
+              {{ conversation.title || '未命名对话' }}
+            </button>
+            <button class="history-edit" type="button" title="重命名" @click.stop="startRename(conversation)">
+              <Pencil :size="14" />
+            </button>
+          </template>
+        </div>
         <p v-if="!conversations.length" class="history-empty">暂无对话</p>
       </div>
 

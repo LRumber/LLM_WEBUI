@@ -36,8 +36,9 @@ public class ConversationRepository {
             title = title.substring(0, 60);
         }
         jdbc.update("""
-                INSERT INTO conversation (id, user_id, model_key, title)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO conversation (
+                    id, user_id, model_key, title, title_source, title_updated_at
+                ) VALUES (?, ?, ?, ?, 'temporary', CURRENT_TIMESTAMP)
                 """, id, userId, model, title);
         return id;
     }
@@ -105,6 +106,54 @@ public class ConversationRepository {
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = (SELECT conversation_id FROM conversation_message WHERE id = ?)
                 """, messageId, messageId);
+    }
+
+    public boolean updateGeneratedTitle(UUID conversationId, String title) {
+        int updated = jdbc.update("""
+                UPDATE conversation
+                SET title = ?, title_source = 'ai', title_updated_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND title_source = 'temporary'
+                """, title, conversationId);
+        return updated > 0;
+    }
+
+    public boolean renameConversation(UUID conversationId, long userId, String title) {
+        int updated = jdbc.update("""
+                UPDATE conversation
+                SET title = ?, title_source = 'manual', title_updated_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+                """, title.strip(), conversationId, userId);
+        return updated > 0;
+    }
+
+    @Transactional
+    public void recordTitleUsage(
+            UUID requestId,
+            long userId,
+            UUID conversationId,
+            String model,
+            int inputTokens,
+            int outputTokens,
+            int durationMs
+    ) {
+        jdbc.update("""
+                INSERT INTO usage_event (
+                    request_id, user_id, conversation_id, model_key, application_key,
+                    input_tokens, output_tokens, duration_ms, status
+                ) VALUES (?, ?, ?, ?, 'system:title', ?, ?, ?, 'completed')
+                """, requestId, userId, conversationId, model, inputTokens, outputTokens, durationMs);
+        jdbc.update("""
+                INSERT INTO daily_user_usage (
+                    usage_date, user_id, conversation_count, request_count, input_tokens, output_tokens
+                ) VALUES (CURRENT_DATE, ?, 0, 1, ?, ?)
+                ON CONFLICT (usage_date, user_id) DO UPDATE SET
+                    request_count = daily_user_usage.request_count + 1,
+                    input_tokens = daily_user_usage.input_tokens + EXCLUDED.input_tokens,
+                    output_tokens = daily_user_usage.output_tokens + EXCLUDED.output_tokens,
+                    last_aggregated_at = CURRENT_TIMESTAMP
+                """, userId, inputTokens, outputTokens);
     }
 
     @Transactional

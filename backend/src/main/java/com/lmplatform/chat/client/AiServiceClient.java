@@ -3,12 +3,14 @@ package com.lmplatform.chat.client;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lmplatform.chat.config.AiServiceProperties;
+import com.lmplatform.chat.model.TitleGenerationResult;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
@@ -69,6 +71,27 @@ public class AiServiceClient {
                     }
                     return null;
                 });
+    }
+
+    public TitleGenerationResult generateTitle(String model, List<Map<String, String>> messages)
+            throws IOException {
+        StringBuilder title = new StringBuilder();
+        AtomicInteger inputTokens = new AtomicInteger();
+        AtomicInteger outputTokens = new AtomicInteger();
+        streamChat(model, messages, event -> {
+            switch (event.path("type").asText()) {
+                case "delta" -> title.append(event.path("content").asText());
+                case "usage" -> {
+                    inputTokens.set(event.path("prompt_tokens").asInt());
+                    outputTokens.set(event.path("completion_tokens").asInt());
+                }
+                case "error" -> throw new IOException(event.path("message").asText("Title generation failed"));
+                default -> {
+                    // Metadata and completion markers do not carry title content.
+                }
+            }
+        });
+        return new TitleGenerationResult(title.toString(), inputTokens.get(), outputTokens.get());
     }
 
     @FunctionalInterface

@@ -141,6 +141,8 @@ npm run dev
 
 访问 `http://127.0.0.1:5173/app` 即可进行流式多轮对话。模型入口位于 `ai-service/config/models.json`；后续切换 vLLM 时，将该文件中的 `provider`、`base_url` 和 `model_name` 替换为本地服务配置，并为 vLLM 配置对应认证策略。
 
+首轮对话创建时先使用用户问题生成临时标题，首轮回答保存后再异步生成 AI 标题。标题模型由 `AI_TITLE_MODEL` 独立配置，目前与主对话共用 `deepseek-chat`；后续注册本地轻量模型后，只需将该变量改为对应模型 key。用户手动修改的标题会标记为 `manual`，异步任务不会覆盖。
+
 ## 开发原则
 
 - API 优先，模型推理服务使用 OpenAI 兼容协议

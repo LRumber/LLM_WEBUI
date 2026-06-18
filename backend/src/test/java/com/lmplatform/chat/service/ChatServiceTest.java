@@ -26,8 +26,9 @@ class ChatServiceTest {
     void streamsEventsAndPersistsCompletedResponse() throws Exception {
         ConversationRepository repository = mock(ConversationRepository.class);
         AiServiceClient client = mock(AiServiceClient.class);
+        TitleGenerationService titleGenerationService = mock(TitleGenerationService.class);
         ObjectMapper objectMapper = new ObjectMapper();
-        ChatService service = new ChatService(repository, client, objectMapper);
+        ChatService service = new ChatService(repository, client, objectMapper, titleGenerationService);
         UUID conversationId = UUID.randomUUID();
         UUID userMessageId = UUID.randomUUID();
         UUID assistantMessageId = UUID.randomUUID();
@@ -65,5 +66,6 @@ class ChatServiceTest {
                 any(UUID.class), eq(1L), eq(conversationId), eq("deepseek-chat"),
                 eq(3), eq(2), anyInt(), anyInt(), eq(true)
         );
+        verify(titleGenerationService).generateAsync(conversationId, 1L, "你好", "你好");
     }
 }

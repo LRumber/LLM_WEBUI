@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
 import {
   Archive,
   Bot,
+  Check,
+  Copy,
+  Database,
   FileText,
-  Headphones,
   Library,
   Menu,
   MessageSquarePlus,
   Mic,
+  PanelLeftClose,
   Paperclip,
   Search,
   Send,
@@ -71,7 +76,12 @@ const conversationId = ref<string | null>(null)
 const isGenerating = ref(false)
 const usage = ref({ prompt: 0, completion: 0, total: 0 })
 const conversationArea = ref<HTMLElement | null>(null)
+const promptInput = ref<HTMLTextAreaElement | null>(null)
+const copiedMessageIndex = ref<number | null>(null)
+const serviceOnline = ref(false)
 let abortController: AbortController | null = null
+
+marked.setOptions({ gfm: true, breaks: true })
 
 const selectedModelName = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.display_name ?? 'DeepSeek Chat'
@@ -81,9 +91,29 @@ const login = () => {
   window.location.href = '/api/auth/login'
 }
 
+const renderMarkdown = (content: string) => {
+  return DOMPurify.sanitize(marked.parse(content) as string)
+}
+
+const copyMessage = async (content: string, index: number) => {
+  await navigator.clipboard.writeText(content)
+  copiedMessageIndex.value = index
+  window.setTimeout(() => {
+    if (copiedMessageIndex.value === index) copiedMessageIndex.value = null
+  }, 1600)
+}
+
+const resizeComposer = () => {
+  const textarea = promptInput.value
+  if (!textarea) return
+  textarea.style.height = 'auto'
+  textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
+}
+
 const loadModels = async () => {
   try {
     const response = await fetch('/api/models')
+    serviceOnline.value = response.ok
     if (!response.ok) return
     models.value = await response.json()
     if (models.value.length && !models.value.some((model) => model.key === selectedModel.value)) {
@@ -91,6 +121,7 @@ const loadModels = async () => {
     }
   } catch {
     models.value = []
+    serviceOnline.value = false
   }
 }
 
@@ -186,6 +217,8 @@ const sendPrompt = async (preset?: string) => {
   messages.value.push(userMessage, assistantMessage)
   const assistantIndex = messages.value.length - 1
   prompt.value = ''
+  await nextTick()
+  resizeComposer()
   usage.value = { prompt: 0, completion: 0, total: 0 }
   isGenerating.value = true
   abortController = new AbortController()
@@ -233,6 +266,7 @@ const newConversation = () => {
   messages.value = []
   conversationId.value = null
   prompt.value = ''
+  nextTick(resizeComposer)
   usage.value = { prompt: 0, completion: 0, total: 0 }
 }
 
@@ -267,10 +301,11 @@ onMounted(() => {
   </main>
 
   <main v-else class="workspace-shell">
+    <button v-if="sidebarOpen" class="sidebar-scrim" aria-label="关闭侧栏" @click="sidebarOpen = false"></button>
     <aside class="sidebar" :class="{ open: sidebarOpen }">
       <div class="sidebar-header">
-        <div class="compact-brand"><Bot :size="21" /><span>智能工作台</span></div>
-        <button class="icon-button mobile-only" title="关闭菜单" @click="sidebarOpen = false"><Menu :size="19" /></button>
+        <div class="compact-brand"><span class="brand-symbol"><Bot :size="18" /></span><span>智能工作台</span></div>
+        <button class="icon-button mobile-only" title="关闭侧栏" @click="sidebarOpen = false"><PanelLeftClose :size="19" /></button>
       </div>
 
       <button class="new-chat" type="button" @click="newConversation">
@@ -287,7 +322,7 @@ onMounted(() => {
 
       <div class="history-section">
         <div class="section-label">
-          <span>当前会话</span>
+          <span>最近</span>
           <button class="icon-button" title="搜索对话"><Search :size="16" /></button>
         </div>
         <button
@@ -308,7 +343,7 @@ onMounted(() => {
         <a class="nav-item" href="#"><Settings :size="18" />设置</a>
         <div class="user-row">
           <div class="avatar">管</div>
-          <div><strong>开发用户</strong><span>本地调试模式</span></div>
+          <div class="user-meta"><strong>开发用户</strong><span>本地调试模式</span></div>
         </div>
       </div>
     </aside>
@@ -317,40 +352,44 @@ onMounted(() => {
       <header class="topbar">
         <button class="icon-button mobile-only" title="打开菜单" @click="sidebarOpen = true"><Menu :size="20" /></button>
         <label class="model-selector">
-          <span class="model-status"></span>
           <select v-model="selectedModel" :disabled="isGenerating" aria-label="选择模型">
             <option v-if="!models.length" value="deepseek-chat">DeepSeek Chat</option>
             <option v-for="model in models" :key="model.key" :value="model.key">{{ model.display_name }}</option>
           </select>
         </label>
         <div class="topbar-actions">
-          <span v-if="usage.total" class="token-usage">本次 {{ usage.total }} Tokens</span>
-          <button class="icon-button" title="文件"><FileText :size="18" /></button>
-          <button class="icon-button" title="语音设置"><Headphones :size="18" /></button>
+          <span class="service-status" :class="{ offline: !serviceOnline }"><span></span>{{ serviceOnline ? '服务正常' : '服务离线' }}</span>
+          <span v-if="usage.total" class="token-usage">{{ usage.total }} tokens</span>
         </div>
       </header>
 
       <div ref="conversationArea" class="conversation-area" :class="{ 'has-messages': messages.length }">
         <div v-if="!messages.length" class="empty-state">
-          <div class="empty-icon"><Bot :size="30" /></div>
-          <h2>今天想处理什么？</h2>
-          <p>当前使用 {{ selectedModelName }}，可以直接开始对话。</p>
+          <div class="empty-icon"><Bot :size="24" /></div>
+          <h1>有什么可以帮忙的？</h1>
+          <p>{{ selectedModelName }} 已就绪</p>
           <div class="starter-grid">
-            <button type="button" @click="sendPrompt('请介绍一下你能帮我完成哪些工作。')">介绍你能完成的工作</button>
-            <button type="button" @click="sendPrompt('请帮我制定一个清晰的项目实施计划。')">制定项目实施计划</button>
-            <button type="button" @click="sendPrompt('请用简洁的语言解释大模型 RAG 的工作原理。')">解释 RAG 工作原理</button>
+            <button type="button" @click="sendPrompt('请介绍一下你能帮我完成哪些工作。')"><Bot :size="17" />介绍你能完成的工作</button>
+            <button type="button" @click="sendPrompt('请帮我制定一个清晰的项目实施计划。')"><FileText :size="17" />制定项目实施计划</button>
+            <button type="button" @click="sendPrompt('请用简洁的语言解释大模型 RAG 的工作原理。')"><Database :size="17" />解释 RAG 工作原理</button>
           </div>
         </div>
 
         <div v-else class="message-list">
           <article v-for="(message, index) in messages" :key="index" class="message" :class="message.role">
-            <div class="message-avatar">
-              <Bot v-if="message.role === 'assistant'" :size="18" />
-              <span v-else>我</span>
-            </div>
-            <div class="message-body" :class="{ error: message.error }">
-              <p v-if="message.content">{{ message.content }}</p>
-              <div v-else class="typing-indicator" aria-label="模型正在生成"><i></i><i></i><i></i></div>
+            <div v-if="message.role === 'assistant'" class="message-avatar"><Bot :size="17" /></div>
+            <div class="message-column">
+              <div class="message-body" :class="{ error: message.error }">
+                <div v-if="message.content && message.role === 'assistant'" class="markdown-body" v-html="renderMarkdown(message.content)"></div>
+                <p v-else-if="message.content">{{ message.content }}</p>
+                <div v-else class="typing-indicator" aria-label="模型正在生成"><i></i><i></i><i></i></div>
+              </div>
+              <div v-if="message.role === 'assistant' && message.content" class="message-actions">
+                <button class="message-action" type="button" title="复制回答" @click="copyMessage(message.content, index)">
+                  <Check v-if="copiedMessageIndex === index" :size="15" />
+                  <Copy v-else :size="15" />
+                </button>
+              </div>
             </div>
           </article>
         </div>
@@ -359,10 +398,12 @@ onMounted(() => {
       <footer class="composer-wrap">
         <div class="composer">
           <textarea
+            ref="promptInput"
             v-model="prompt"
-            rows="2"
-            placeholder="输入消息，Enter 发送，Shift + Enter 换行"
+            rows="1"
+            placeholder="给智能工作台发送消息"
             :disabled="isGenerating"
+            @input="resizeComposer"
             @keydown="handleComposerKeydown"
           ></textarea>
           <div class="composer-toolbar">
@@ -375,7 +416,7 @@ onMounted(() => {
             <button v-else class="send-button" type="button" title="发送" :disabled="!prompt.trim()" @click="sendPrompt()"><Send :size="18" /></button>
           </div>
         </div>
-        <p class="composer-note">模型输出可能存在错误，重要信息请核实。</p>
+        <p class="composer-note">内容由 AI 生成，请核实重要信息</p>
       </footer>
     </section>
   </main>

@@ -14,8 +14,10 @@ import com.lmplatform.chat.repository.ConversationRepository;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
+/** Unit tests for title normalization, source updates, and title-specific usage accounting. */
 class TitleGenerationServiceTest {
 
+    /** Ensures model decoration is removed before the generated title is stored. */
     @Test
     void generatesNormalizedTitleAndRecordsUsage() throws Exception {
         ConversationRepository repository = mock(ConversationRepository.class);

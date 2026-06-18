@@ -16,6 +16,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+/** HTTP boundary between the Java business service and the Python AI gateway. */
 @Component
 public class AiServiceClient {
 
@@ -33,6 +34,7 @@ public class AiServiceClient {
                 .build();
     }
 
+    /** Fetches the AI gateway's model registry as an unchanged JSON document. */
     public String listModels() {
         return restClient.get()
                 .uri("/v1/models")
@@ -41,6 +43,10 @@ public class AiServiceClient {
                 .body(String.class);
     }
 
+    /**
+     * Sends an OpenAI-compatible conversation and forwards each normalized SSE event as it arrives.
+     * The response is consumed inside the exchange callback so the underlying connection stays open.
+     */
     public void streamChat(String model, List<Map<String, String>> messages, EventConsumer consumer)
             throws IOException {
         Map<String, Object> payload = Map.of("model", model, "messages", messages);
@@ -73,6 +79,7 @@ public class AiServiceClient {
                 });
     }
 
+    /** Reuses the streaming protocol for title generation and collects text plus token usage. */
     public TitleGenerationResult generateTitle(String model, List<Map<String, String>> messages)
             throws IOException {
         StringBuilder title = new StringBuilder();
@@ -94,6 +101,7 @@ public class AiServiceClient {
         return new TitleGenerationResult(title.toString(), inputTokens.get(), outputTokens.get());
     }
 
+    /** Callback that may stop the upstream stream when the downstream client disconnects. */
     @FunctionalInterface
     public interface EventConsumer {
         void accept(JsonNode event) throws IOException;

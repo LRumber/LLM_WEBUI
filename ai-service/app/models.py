@@ -1,3 +1,5 @@
+"""Pydantic contracts shared by model registration and streaming-chat endpoints."""
+
 from enum import StrEnum
 from typing import Literal
 
@@ -5,6 +7,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 
 class ModelCapability(StrEnum):
+    """Capabilities used by clients to enable only compatible UI and orchestration features."""
     CHAT = "chat"
     VISION = "vision"
     EMBEDDING = "embedding"
@@ -13,6 +16,7 @@ class ModelCapability(StrEnum):
 
 
 class ModelEndpoint(BaseModel):
+    """Validated local registration for an OpenAI-compatible inference endpoint."""
     key: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]+$")
     display_name: str
     provider: str
@@ -24,17 +28,20 @@ class ModelEndpoint(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    """Health endpoint response contract."""
     service: str
     status: str
     registered_models: int
 
 
 class ChatMessage(BaseModel):
+    """Single role-bound message accepted by an OpenAI-compatible chat model."""
     role: Literal["system", "user", "assistant"]
     content: str = Field(min_length=1, max_length=100_000)
 
 
 class ChatRequest(BaseModel):
+    """Bounded chat request forwarded to a registered model."""
     model: str
     messages: list[ChatMessage] = Field(min_length=1, max_length=100)
     temperature: float = Field(default=0.7, ge=0, le=2)
@@ -42,6 +49,7 @@ class ChatRequest(BaseModel):
 
 
 class TokenUsage(BaseModel):
+    """Normalized token counts reported by compatible inference engines."""
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0

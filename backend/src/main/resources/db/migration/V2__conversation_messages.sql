@@ -1,3 +1,4 @@
+-- Add ordered message persistence so history and model context come from PostgreSQL.
 CREATE TABLE conversation_message (
     id                  UUID PRIMARY KEY,
     conversation_id     UUID NOT NULL REFERENCES conversation (id) ON DELETE CASCADE,
@@ -14,6 +15,7 @@ CREATE TABLE conversation_message (
     UNIQUE (conversation_id, sequence_no)
 );
 
+-- Primary history lookup follows conversation order; audit lookup follows creation time.
 CREATE INDEX idx_conversation_message_conversation
     ON conversation_message (conversation_id, sequence_no);
 

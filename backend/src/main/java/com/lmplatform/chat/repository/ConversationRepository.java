@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Owns SQL persistence for conversations, messages, titles, and usage aggregates. */
 @Repository
 public class ConversationRepository {
 
@@ -19,6 +20,10 @@ public class ConversationRepository {
         this.jdbc = jdbc;
     }
 
+    /**
+     * Returns the temporary local user used before OAuth2 principal integration is complete.
+     * Replace this boundary with the authenticated shadow-user id when login is connected.
+     */
     public long ensureDevelopmentUser() {
         Long id = jdbc.queryForObject("""
                 INSERT INTO app_user (external_user_id, account_number, display_name, user_number)
@@ -29,6 +34,7 @@ public class ConversationRepository {
         return id;
     }
 
+    /** Creates a conversation with an immediate first-prompt title marked as temporary. */
     public UUID createConversation(long userId, String model, String firstPrompt) {
         UUID id = UUID.randomUUID();
         String title = firstPrompt.strip().replaceAll("\\s+", " ");
@@ -43,6 +49,7 @@ public class ConversationRepository {
         return id;
     }
 
+    /** Checks ownership without exposing soft-deleted conversations. */
     public boolean belongsToUser(UUID conversationId, long userId) {
         Integer count = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM conversation WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
@@ -53,6 +60,7 @@ public class ConversationRepository {
         return count != null && count > 0;
     }
 
+    /** Appends a message with the next stable sequence number and touches the parent conversation. */
     @Transactional
     public UUID appendMessage(UUID conversationId, String role, String content, String status) {
         Integer sequence = jdbc.queryForObject(
@@ -69,6 +77,7 @@ public class ConversationRepository {
         return id;
     }
 
+    /** Loads only completed, non-empty messages that are safe to send back to a model. */
     public List<Map<String, String>> modelMessages(UUID conversationId) {
         return jdbc.query("""
                 SELECT role, content
@@ -83,6 +92,7 @@ public class ConversationRepository {
         ), conversationId);
     }
 
+    /** Finalizes a generated assistant message and synchronizes the conversation message count. */
     public void finishAssistantMessage(
             UUID messageId,
             String content,
@@ -108,6 +118,7 @@ public class ConversationRepository {
                 """, messageId, messageId);
     }
 
+    /** Updates an AI title only while it is still temporary, preserving later manual edits. */
     public boolean updateGeneratedTitle(UUID conversationId, String title) {
         int updated = jdbc.update("""
                 UPDATE conversation
@@ -118,6 +129,7 @@ public class ConversationRepository {
         return updated > 0;
     }
 
+    /** Applies a user-owned title and marks it as authoritative. */
     public boolean renameConversation(UUID conversationId, long userId, String title) {
         int updated = jdbc.update("""
                 UPDATE conversation
@@ -128,6 +140,7 @@ public class ConversationRepository {
         return updated > 0;
     }
 
+    /** Records title-generation usage and rolls it into the current user's daily aggregate. */
     @Transactional
     public void recordTitleUsage(
             UUID requestId,
@@ -156,6 +169,7 @@ public class ConversationRepository {
                 """, userId, inputTokens, outputTokens);
     }
 
+    /** Atomically records a completed chat call and updates conversation and daily counters. */
     @Transactional
     public void recordCompletedUsage(
             UUID requestId,
@@ -194,6 +208,7 @@ public class ConversationRepository {
                 """, userId, newConversation ? 1 : 0, inputTokens, outputTokens);
     }
 
+    /** Returns the most recently active conversations for the sidebar. */
     public List<ConversationSummary> listConversations(long userId) {
         return jdbc.query("""
                 SELECT c.id, c.title, c.model_key, c.message_count, c.created_at, c.updated_at,
@@ -217,6 +232,7 @@ public class ConversationRepository {
         ), userId);
     }
 
+    /** Returns ordered persisted messages after enforcing conversation ownership. */
     public List<ConversationMessage> listMessages(UUID conversationId, long userId) {
         return jdbc.query("""
                 SELECT cm.id, cm.role, cm.content, cm.status, cm.input_tokens, cm.output_tokens, cm.created_at

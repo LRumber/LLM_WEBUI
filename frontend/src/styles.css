@@ -1,3 +1,4 @@
+/* Global document defaults and shared control behavior. */
 :root {
   font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   color: #202123;
@@ -13,6 +14,7 @@ button, textarea, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 
+/* Unified-identity login surface. */
 .login-page {
   min-height: 100vh;
   display: grid;
@@ -49,6 +51,7 @@ button:disabled { cursor: not-allowed; }
 .login-button:hover { background: #11775d; }
 .login-note { margin: 18px 0 0; color: #929292; font-size: 12px; }
 
+/* Full-height workspace and responsive navigation shell. */
 .workspace-shell { width: 100%; height: 100vh; display: flex; overflow: hidden; background: #ffffff; }
 .sidebar-scrim { display: none; }
 
@@ -124,6 +127,7 @@ button:disabled { cursor: not-allowed; }
 .user-meta strong { color: #333333; font-size: 12px; }
 .user-meta span { margin-top: 2px; color: #8b8b8b; font-size: 10px; }
 
+/* Conversation header and Element Plus model selector theme overrides. */
 .chat-workspace { min-width: 0; flex: 1; display: flex; flex-direction: column; background: #ffffff; }
 .topbar { height: 56px; flex: 0 0 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: rgba(255, 255, 255, 0.96); border-bottom: 1px solid #eeeeee; }
 .model-selector { height: 38px; display: flex; align-items: center; }
@@ -153,6 +157,7 @@ button:disabled { cursor: not-allowed; }
 .service-status.offline span { background: #b45b43; }
 .token-usage { margin-right: 6px; color: #858585; font-size: 11px; }
 
+/* Empty state, prompt suggestions, and centered reading column. */
 .conversation-area { min-height: 0; flex: 1; display: grid; place-items: center; overflow-y: auto; padding: 38px 22px 24px; scroll-behavior: smooth; }
 .conversation-area.has-messages { display: block; }
 .empty-state { width: min(100%, 720px); margin-top: -5vh; text-align: center; }
@@ -163,6 +168,7 @@ button:disabled { cursor: not-allowed; }
 .starter-grid button { min-height: 58px; display: flex; align-items: center; justify-content: flex-start; gap: 9px; padding: 10px 12px; color: #555555; background: #ffffff; border: 1px solid #e0e0e0; border-radius: 8px; line-height: 1.45; text-align: left; font-size: 12px; }
 .starter-grid button:hover { color: #202020; background: #f8f8f8; border-color: #c8c8c8; }
 
+/* ChatGPT-style message flow: user bubbles and document-like assistant output. */
 .message-list { width: min(100%, 780px); margin: 0 auto; padding: 4px 0 42px; }
 .message { position: relative; display: flex; gap: 12px; padding: 19px 0; }
 .message.user { justify-content: flex-end; padding-left: 90px; }
@@ -179,6 +185,7 @@ button:disabled { cursor: not-allowed; }
 .message-action { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; color: #858585; background: transparent; border: 0; border-radius: 6px; }
 .message-action:hover { color: #303030; background: #f0f0f0; }
 
+/* Sanitized Markdown typography, code, quotes, links, and tabular content. */
 .markdown-body { overflow-wrap: anywhere; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
@@ -205,6 +212,7 @@ button:disabled { cursor: not-allowed; }
 .typing-indicator i:nth-child(3) { animation-delay: 280ms; }
 @keyframes typing { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
 
+/* Bottom composer and future file, voice, and knowledge controls. */
 .composer-wrap { flex: 0 0 auto; padding: 10px 20px 15px; background: #ffffff; }
 .composer { width: min(100%, 780px); margin: 0 auto; padding: 8px 9px 7px 13px; background: #ffffff; border: 1px solid #d2d2d2; border-radius: 22px; box-shadow: 0 5px 18px rgba(0, 0, 0, 0.08); }
 .composer:focus-within { border-color: #a9a9a9; box-shadow: 0 6px 22px rgba(0, 0, 0, 0.1); }
@@ -222,6 +230,7 @@ button:disabled { cursor: not-allowed; }
 .composer-note { margin: 7px 0 0; color: #9a9a9a; text-align: center; font-size: 10px; }
 .mobile-only { display: none; }
 
+/* Mobile navigation overlay and compact message/composer dimensions. */
 @media (max-width: 760px) {
   .mobile-only { display: grid; }
   .sidebar-scrim { position: fixed; inset: 0; z-index: 19; display: block; background: rgba(0, 0, 0, 0.28); border: 0; }

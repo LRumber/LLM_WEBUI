@@ -20,8 +20,10 @@ import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
+/** Unit tests for the chat orchestration boundary without network or database dependencies. */
 class ChatServiceTest {
 
+    /** Confirms event forwarding, persistence, accounting, and title scheduling for a new chat. */
     @Test
     void streamsEventsAndPersistsCompletedResponse() throws Exception {
         ConversationRepository repository = mock(ConversationRepository.class);

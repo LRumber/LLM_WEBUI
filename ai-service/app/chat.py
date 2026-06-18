@@ -1,3 +1,5 @@
+"""Translate provider-specific OpenAI streams into the platform's normalized SSE events."""
+
 import json
 from collections.abc import AsyncIterator
 
@@ -8,19 +10,26 @@ from app.models import ChatRequest, ModelEndpoint
 
 
 class ChatConfigurationError(RuntimeError):
+    """Raised when a registered provider has no usable local credential."""
+
     pass
 
 
 class UpstreamChatError(RuntimeError):
+    """Raised when the remote or local inference endpoint rejects a request."""
+
     pass
 
 
 class ChatGateway:
+    """Call OpenAI-compatible model endpoints without exposing credentials to Java or browsers."""
+
     def __init__(
         self,
         settings: Settings,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        """Create a gateway; an optional transport allows deterministic HTTP unit tests."""
         self._settings = settings
         self._transport = transport
 
@@ -29,6 +38,7 @@ class ChatGateway:
         request: ChatRequest,
         model: ModelEndpoint,
     ) -> AsyncIterator[dict]:
+        """Yield normalized delta, usage, and completion events from one upstream chat stream."""
         api_key = self._api_key_for(model)
         payload = {
             "model": model.model_name,
@@ -76,6 +86,7 @@ class ChatGateway:
         yield {"type": "done"}
 
     def _api_key_for(self, model: ModelEndpoint) -> str:
+        """Resolve a provider credential while keeping secret values inside the AI process."""
         if model.provider == "deepseek" and self._settings.deepseek_api_key:
             return self._settings.deepseek_api_key.get_secret_value()
         raise ChatConfigurationError(f"API key is not configured for provider: {model.provider}")

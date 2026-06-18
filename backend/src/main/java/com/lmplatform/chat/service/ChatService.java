@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.stereotype.Service;
 
+/** Coordinates persistence, model streaming, SSE forwarding, and usage accounting. */
 @Service
 public class ChatService {
 
@@ -34,6 +35,10 @@ public class ChatService {
         this.titleGenerationService = titleGenerationService;
     }
 
+    /**
+     * Executes one chat turn and writes normalized SSE events directly to the servlet response.
+     * Partial assistant output is persisted when the upstream or browser connection fails.
+     */
     public void stream(ChatStreamRequest request, OutputStream output) throws IOException {
         long userId = repository.ensureDevelopmentUser();
         boolean newConversation = request.conversationId() == null;
@@ -121,6 +126,7 @@ public class ChatService {
             AtomicInteger outputTokens,
             AtomicLong firstTokenAt
     ) throws IOException {
+        // Keep accounting state beside the stream while forwarding the original normalized event.
         String type = event.path("type").asText();
         if ("delta".equals(type)) {
             String content = event.path("content").asText();
@@ -138,6 +144,7 @@ public class ChatService {
     }
 
     private void writeEvent(OutputStream output, Map<String, ?> event) throws IOException {
+        // A flush per event is required for visible token-by-token rendering in the browser.
         String payload = "data: " + objectMapper.writeValueAsString(event) + "\n\n";
         output.write(payload.getBytes(StandardCharsets.UTF_8));
         output.flush();

@@ -1,6 +1,7 @@
-from contextlib import asynccontextmanager
+"""FastAPI entry point exposing health, model discovery, and normalized streaming chat."""
 
 import json
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -17,6 +18,7 @@ chat_gateway = ChatGateway(settings)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    """Load model configuration before the service begins accepting traffic."""
     registry.load()
     yield
 
@@ -31,6 +33,7 @@ app = FastAPI(
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
+    """Return process liveness and the number of enabled model registrations."""
     return HealthResponse(
         service=settings.service_name,
         status="UP",
@@ -40,11 +43,13 @@ def health() -> HealthResponse:
 
 @app.get("/v1/models", response_model=list[ModelEndpoint])
 def list_models() -> list[ModelEndpoint]:
+    """List models that administrators have enabled in the local registry."""
     return registry.list_enabled()
 
 
 @app.get("/v1/models/{model_key}", response_model=ModelEndpoint)
 def get_model(model_key: str) -> ModelEndpoint:
+    """Return one enabled model or a stable not-found response."""
     model = registry.get(model_key)
     if model is None:
         raise HTTPException(status_code=404, detail="Model not found")
@@ -53,11 +58,13 @@ def get_model(model_key: str) -> ModelEndpoint:
 
 @app.post("/v1/chat/stream")
 def stream_chat(request: ChatRequest) -> StreamingResponse:
+    """Validate a model key and stream normalized SSE events to the Java service."""
     model = registry.get(request.model)
     if model is None or "chat" not in model.capabilities:
         raise HTTPException(status_code=404, detail="Chat model not found")
 
     async def event_stream():
+        """Convert service exceptions into final SSE error events after headers are sent."""
         try:
             async for event in chat_gateway.stream(request, model):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"

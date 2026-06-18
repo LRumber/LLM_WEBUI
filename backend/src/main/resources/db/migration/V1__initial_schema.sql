@@ -1,3 +1,6 @@
+-- Baseline business schema: shadow users, login audit, conversations, and usage accounting.
+
+-- Local shadow users reference identities owned by the external OAuth2 provider.
 CREATE TABLE app_user (
     id                  BIGSERIAL PRIMARY KEY,
     external_user_id    BIGINT NOT NULL UNIQUE,
@@ -17,6 +20,7 @@ CREATE TABLE app_user (
 CREATE INDEX idx_app_user_tenant ON app_user (tenant_id);
 CREATE INDEX idx_app_user_account ON app_user (account_number);
 
+-- Immutable login audit events support security review and daily activity reporting.
 CREATE TABLE login_event (
     id                  BIGSERIAL PRIMARY KEY,
     user_id             BIGINT REFERENCES app_user (id),
@@ -33,6 +37,7 @@ CREATE TABLE login_event (
 CREATE INDEX idx_login_event_user_time ON login_event (user_id, occurred_at DESC);
 CREATE INDEX idx_login_event_time ON login_event (occurred_at DESC);
 
+-- Conversation headers store ownership, selected model, title, and soft-deletion state.
 CREATE TABLE conversation (
     id                  UUID PRIMARY KEY,
     user_id             BIGINT NOT NULL REFERENCES app_user (id),
@@ -47,6 +52,7 @@ CREATE TABLE conversation (
 
 CREATE INDEX idx_conversation_user_time ON conversation (user_id, updated_at DESC);
 
+-- Each model invocation is recorded once for audit-grade token and latency statistics.
 CREATE TABLE usage_event (
     id                  BIGSERIAL PRIMARY KEY,
     request_id          UUID NOT NULL UNIQUE,
@@ -68,6 +74,7 @@ CREATE TABLE usage_event (
 CREATE INDEX idx_usage_event_user_time ON usage_event (user_id, occurred_at DESC);
 CREATE INDEX idx_usage_event_model_time ON usage_event (model_key, occurred_at DESC);
 
+-- Daily aggregates keep administrative dashboards fast without discarding raw events.
 CREATE TABLE daily_user_usage (
     usage_date          DATE NOT NULL,
     user_id             BIGINT NOT NULL REFERENCES app_user (id),

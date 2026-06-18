@@ -22,6 +22,7 @@
     </properties>
 
     <dependencies>
+        <!-- HTTP, security, validation, persistence, and operational runtime. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -56,6 +57,7 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Test dependencies are excluded from production packaging. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -70,6 +72,7 @@
 
     <build>
         <plugins>
+            <!-- Produces an executable Spring Boot artifact for offline container images. -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

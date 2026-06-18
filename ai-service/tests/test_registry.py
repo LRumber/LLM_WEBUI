@@ -1,9 +1,12 @@
+"""Tests for model registry validation and enabled-model filtering."""
+
 import json
 
 from app.registry import ModelRegistry
 
 
 def test_registry_only_returns_enabled_models(tmp_path):
+    """Disabled registrations must not be discoverable or directly resolvable."""
     config = tmp_path / "models.json"
     config.write_text(
         json.dumps(

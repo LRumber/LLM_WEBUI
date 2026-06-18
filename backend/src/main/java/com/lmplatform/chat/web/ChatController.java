@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+/** HTTP API for model discovery, streaming chat, and conversation history management. */
 @RestController
 @RequestMapping("/api")
 public class ChatController {
@@ -39,11 +40,13 @@ public class ChatController {
         this.aiServiceClient = aiServiceClient;
     }
 
+    /** Proxies registered models so browser clients never call the AI service directly. */
     @GetMapping(value = "/models", produces = MediaType.APPLICATION_JSON_VALUE)
     public String models() {
         return aiServiceClient.listModels();
     }
 
+    /** Opens a persisted streaming turn and disables intermediary buffering. */
     @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<StreamingResponseBody> stream(@Valid @RequestBody ChatStreamRequest request) {
         StreamingResponseBody body = output -> chatService.stream(request, output);
@@ -54,18 +57,21 @@ public class ChatController {
                 .body(body);
     }
 
+    /** Lists conversations belonging to the current development user. */
     @GetMapping("/conversations")
     public List<ConversationSummary> conversations() {
         long userId = repository.ensureDevelopmentUser();
         return repository.listConversations(userId);
     }
 
+    /** Restores ordered messages for one owned conversation. */
     @GetMapping("/conversations/{conversationId}/messages")
     public List<ConversationMessage> messages(@PathVariable UUID conversationId) {
         long userId = repository.ensureDevelopmentUser();
         return repository.listMessages(conversationId, userId);
     }
 
+    /** Renames an owned conversation and protects the manual title from async replacement. */
     @PatchMapping("/conversations/{conversationId}")
     public ResponseEntity<Void> renameConversation(
             @PathVariable UUID conversationId,

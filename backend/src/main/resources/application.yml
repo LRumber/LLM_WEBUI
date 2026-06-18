@@ -1,3 +1,4 @@
+# Core HTTP service and secure session-cookie defaults.
 server:
   port: ${SERVER_PORT:8080}
   servlet:
@@ -7,6 +8,7 @@ server:
         same-site: lax
         secure: ${SESSION_COOKIE_SECURE:false}
 
+# Framework, database migration, and JSON serialization settings.
 spring:
   mvc:
     async:
@@ -22,6 +24,7 @@ spring:
   jackson:
     default-property-inclusion: non_null
 
+# Platform-owned integrations remain environment-configurable for offline deployments.
 platform:
   oauth2:
     server: ${OAUTH2_SERVER:http://172.16.4.250:30801}
@@ -34,6 +37,7 @@ platform:
     # Keep title generation independently configurable so it can move to a small local model.
     title-model: ${AI_TITLE_MODEL:deepseek-chat}
 
+# Expose only the operational endpoints required by local monitoring.
 management:
   endpoints:
     web:

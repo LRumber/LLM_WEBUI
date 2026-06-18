@@ -1,3 +1,5 @@
+"""Contract tests for OpenAI-compatible SSE translation and usage extraction."""
+
 import json
 
 import httpx
@@ -11,6 +13,7 @@ from app.models import ChatMessage, ChatRequest, ModelCapability, ModelEndpoint
 
 @pytest.mark.asyncio
 async def test_chat_gateway_translates_openai_stream():
+    """Ensure provider chunks become ordered platform delta, usage, and done events."""
     upstream_events = [
         {"choices": [{"delta": {"content": "你"}}]},
         {"choices": [{"delta": {"content": "好"}}]},
@@ -23,6 +26,7 @@ async def test_chat_gateway_translates_openai_stream():
     body += "data: [DONE]\n\n"
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """Act as a deterministic DeepSeek-compatible streaming endpoint."""
         assert request.headers["Authorization"] == "Bearer test-key"
         assert request.url.path == "/chat/completions"
         return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})

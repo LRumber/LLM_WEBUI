@@ -13,6 +13,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
+/** MVC contract tests for the custom OAuth2 entry point. */
 @WebMvcTest(AuthController.class)
 @Import(SecurityConfig.class)
 @EnableConfigurationProperties(OAuth2GatewayProperties.class)
@@ -21,6 +22,7 @@ class AuthControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
+    /** Verifies the login route supplies code-flow parameters and an anti-CSRF state value. */
     @Test
     void loginRedirectsToUnifiedIdentityGateway() throws Exception {
         mockMvc.perform(get("/api/auth/login"))

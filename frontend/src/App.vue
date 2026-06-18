@@ -25,20 +25,24 @@ import {
   Users,
 } from 'lucide-vue-next'
 
+// Domain contracts mirror the JSON returned by Spring Boot and the normalized SSE protocol.
 type Role = 'user' | 'assistant'
 
+/** Message rendered in the active browser conversation. */
 interface ChatMessage {
   role: Role
   content: string
   error?: boolean
 }
 
+/** Model registration exposed through the Java proxy. */
 interface ModelInfo {
   key: string
   display_name: string
   capabilities: string[]
 }
 
+/** Normalized event emitted by Spring Boot while forwarding an AI response. */
 interface StreamEvent {
   type: 'metadata' | 'delta' | 'usage' | 'done' | 'error'
   content?: string
@@ -50,6 +54,7 @@ interface StreamEvent {
   total_tokens?: number
 }
 
+/** Compact persisted conversation shown in the sidebar. */
 interface ConversationSummary {
   id: string
   title: string
@@ -59,6 +64,7 @@ interface ConversationSummary {
   updatedAt: string
 }
 
+/** Persisted message returned when restoring an existing conversation. */
 interface PersistedMessage {
   role: Role
   content: string
@@ -67,6 +73,7 @@ interface PersistedMessage {
   outputTokens: number
 }
 
+// Page and conversation state stays local; durable data always comes from Spring Boot.
 const isWorkspace = computed(() => window.location.pathname.startsWith('/app'))
 const prompt = ref('')
 const models = ref<ModelInfo[]>([])
@@ -85,20 +92,24 @@ const editingConversationId = ref<string | null>(null)
 const editingTitle = ref('')
 let abortController: AbortController | null = null
 
+// Configure GitHub-flavored Markdown once; every rendered result is sanitized below.
 marked.setOptions({ gfm: true, breaks: true })
 
 const selectedModelName = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.display_name ?? 'DeepSeek Chat'
 })
 
+/** Starts the organization's server-managed OAuth2 redirect flow. */
 const login = () => {
   window.location.href = '/api/auth/login'
 }
 
+/** Converts model Markdown to sanitized HTML safe for v-html rendering. */
 const renderMarkdown = (content: string) => {
   return DOMPurify.sanitize(marked.parse(content) as string)
 }
 
+/** Copies one assistant answer and briefly changes the action icon to confirmation. */
 const copyMessage = async (content: string, index: number) => {
   await navigator.clipboard.writeText(content)
   copiedMessageIndex.value = index
@@ -107,6 +118,7 @@ const copyMessage = async (content: string, index: number) => {
   }, 1600)
 }
 
+/** Grows the composer until its maximum height, then lets the textarea scroll. */
 const resizeComposer = () => {
   const textarea = promptInput.value
   if (!textarea) return
@@ -114,6 +126,7 @@ const resizeComposer = () => {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
 }
 
+/** Loads selectable model registrations through the Java business-service boundary. */
 const loadModels = async () => {
   try {
     const response = await fetch('/api/models')
@@ -129,6 +142,7 @@ const loadModels = async () => {
   }
 }
 
+/** Refreshes the current user's persisted conversation summaries. */
 const loadConversations = async () => {
   try {
     const response = await fetch('/api/conversations')
@@ -138,12 +152,14 @@ const loadConversations = async () => {
   }
 }
 
+/** Polls briefly because title generation intentionally runs after the first chat response. */
 const scheduleTitleRefresh = () => {
   // Title generation runs asynchronously after the first answer is persisted.
   const refreshDelays = [1500, 4000, 8000]
   refreshDelays.forEach((delay) => window.setTimeout(loadConversations, delay))
 }
 
+/** Restores an existing conversation and its last reported token usage. */
 const openConversation = async (conversation: ConversationSummary) => {
   if (isGenerating.value) return
   const response = await fetch(`/api/conversations/${conversation.id}/messages`)
@@ -170,16 +186,19 @@ const openConversation = async (conversation: ConversationSummary) => {
   await scrollToBottom()
 }
 
+/** Enters inline title-edit mode for one sidebar conversation. */
 const startRename = (conversation: ConversationSummary) => {
   editingConversationId.value = conversation.id
   editingTitle.value = conversation.title
 }
 
+/** Leaves inline title-edit mode without changing persisted data. */
 const cancelRename = () => {
   editingConversationId.value = null
   editingTitle.value = ''
 }
 
+/** Persists a non-empty manual title, which takes precedence over async AI titles. */
 const saveRename = async () => {
   const id = editingConversationId.value
   const title = editingTitle.value.trim()
@@ -195,6 +214,7 @@ const saveRename = async () => {
   if (response.ok) await loadConversations()
 }
 
+/** Keeps the newest streamed content visible without moving the whole document viewport. */
 const scrollToBottom = async () => {
   await nextTick()
   if (conversationArea.value) {
@@ -202,6 +222,7 @@ const scrollToBottom = async () => {
   }
 }
 
+/** Applies one normalized SSE event to reactive message, metadata, or usage state. */
 const applyStreamEvent = (event: StreamEvent, assistantIndex: number) => {
   const assistant = messages.value[assistantIndex]
   if (event.type === 'metadata' && event.conversation_id) {
@@ -222,6 +243,7 @@ const applyStreamEvent = (event: StreamEvent, assistantIndex: number) => {
   }
 }
 
+/** Incrementally decodes SSE blocks from the Fetch response body. */
 const consumeEventStream = async (response: Response, assistantIndex: number) => {
   if (!response.body) throw new Error('浏览器不支持流式响应')
   const reader = response.body.getReader()
@@ -243,6 +265,7 @@ const consumeEventStream = async (response: Response, assistantIndex: number) =>
   }
 }
 
+/** Creates or continues a persisted conversation and consumes its streaming answer. */
 const sendPrompt = async (preset?: string) => {
   const content = (preset ?? prompt.value).trim()
   if (!content || isGenerating.value) return
@@ -296,8 +319,10 @@ const sendPrompt = async (preset?: string) => {
   }
 }
 
+/** Cancels the browser request; the backend persists any partial assistant output. */
 const stopGeneration = () => abortController?.abort()
 
+/** Resets only browser state; existing persisted conversations remain in history. */
 const newConversation = () => {
   abortController?.abort()
   messages.value = []
@@ -307,6 +332,7 @@ const newConversation = () => {
   usage.value = { prompt: 0, completion: 0, total: 0 }
 }
 
+/** Implements Enter-to-send while preserving Shift+Enter for multiline input. */
 const handleComposerKeydown = (event: KeyboardEvent) => {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
@@ -314,6 +340,7 @@ const handleComposerKeydown = (event: KeyboardEvent) => {
   }
 }
 
+// Initial data is loaded only for the workspace route; the login route stays dependency-light.
 onMounted(() => {
   if (isWorkspace.value) {
     loadModels()
@@ -323,6 +350,7 @@ onMounted(() => {
 </script>
 
 <template>
+  <!-- Authentication entry screen. -->
   <main v-if="!isWorkspace" class="login-page">
     <section class="login-panel" aria-labelledby="login-title">
       <div class="brand-mark"><Bot :size="28" /></div>
@@ -337,9 +365,11 @@ onMounted(() => {
     </section>
   </main>
 
+  <!-- Main application shell: navigation, conversation viewport, and composer. -->
   <main v-else class="workspace-shell">
     <button v-if="sidebarOpen" class="sidebar-scrim" aria-label="关闭侧栏" @click="sidebarOpen = false"></button>
     <aside class="sidebar" :class="{ open: sidebarOpen }">
+      <!-- Product identity and primary navigation. -->
       <div class="sidebar-header">
         <div class="compact-brand"><span class="brand-symbol"><Bot :size="18" /></span><span>智能工作台</span></div>
         <button class="icon-button mobile-only" title="关闭侧栏" @click="sidebarOpen = false"><PanelLeftClose :size="19" /></button>
@@ -358,6 +388,7 @@ onMounted(() => {
       </nav>
 
       <div class="history-section">
+        <!-- Persisted conversations support selection and inline manual renaming. -->
         <div class="section-label">
           <span>最近</span>
           <button class="icon-button" title="搜索对话"><Search :size="16" /></button>
@@ -406,6 +437,7 @@ onMounted(() => {
     </aside>
 
     <section class="chat-workspace">
+      <!-- Model selection and service health. -->
       <header class="topbar">
         <button class="icon-button mobile-only" title="打开菜单" @click="sidebarOpen = true"><Menu :size="20" /></button>
         <div class="model-selector">
@@ -439,6 +471,7 @@ onMounted(() => {
       </header>
 
       <div ref="conversationArea" class="conversation-area" :class="{ 'has-messages': messages.length }">
+        <!-- Empty-state suggestions are real prompts, not decorative cards. -->
         <div v-if="!messages.length" class="empty-state">
           <div class="empty-icon"><Bot :size="24" /></div>
           <h1>有什么可以帮忙的？</h1>
@@ -451,6 +484,7 @@ onMounted(() => {
         </div>
 
         <div v-else class="message-list">
+          <!-- Assistant Markdown is sanitized; user text is rendered as plain text. -->
           <article v-for="(message, index) in messages" :key="index" class="message" :class="message.role">
             <div v-if="message.role === 'assistant'" class="message-avatar"><Bot :size="17" /></div>
             <div class="message-column">
@@ -471,6 +505,7 @@ onMounted(() => {
       </div>
 
       <footer class="composer-wrap">
+        <!-- The composer owns file/voice placeholders, cancellation, and keyboard submission. -->
         <div class="composer">
           <textarea
             ref="promptInput"

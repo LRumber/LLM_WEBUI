@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+/** Generates concise first-turn titles without extending the user-visible chat request. */
 @Service
 public class TitleGenerationService {
 
@@ -33,6 +34,10 @@ public class TitleGenerationService {
         this.properties = properties;
     }
 
+    /**
+     * Generates and stores a title on the dedicated executor.
+     * Failures deliberately leave the prompt-derived temporary title in place.
+     */
     @Async("titleTaskExecutor")
     public void generateAsync(
             UUID conversationId,
@@ -79,6 +84,7 @@ public class TitleGenerationService {
     }
 
     private String truncate(String value) {
+        // Bound title-generation cost independently from the main model context window.
         String normalized = value == null ? "" : value.strip();
         return normalized.length() <= MAX_CONTEXT_CHARS
                 ? normalized
@@ -86,6 +92,7 @@ public class TitleGenerationService {
     }
 
     private String normalize(String value) {
+        // Enforce the display contract even when the model ignores prompt formatting instructions.
         String title = value == null ? "" : value.strip().split("\\R", 2)[0].strip();
         title = title.replaceAll("^[\\s\\\"'“”《》]+|[\\s\\\"'“”《》。！？!?：:]+$", "");
         return title.length() <= MAX_TITLE_CHARS ? title : title.substring(0, MAX_TITLE_CHARS);

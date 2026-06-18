@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
+/** Starts and validates the custom OAuth2 authorization-code flow. */
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -23,6 +24,7 @@ public class AuthController {
         this.properties = properties;
     }
 
+    /** Redirects the browser to the identity gateway with a session-bound CSRF state value. */
     @GetMapping("/login")
     public ResponseEntity<Void> login(HttpSession session) {
         String state = UUID.randomUUID().toString();
@@ -40,6 +42,7 @@ public class AuthController {
         return ResponseEntity.status(302).location(authorizeUri).build();
     }
 
+    /** Validates the returned state before token exchange and shadow-user synchronization. */
     @GetMapping("/oauth2/callback")
     public ResponseEntity<?> callback(
             @RequestParam String code,

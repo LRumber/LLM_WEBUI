@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import DOMPurify from 'dompurify'
+import { ElOption, ElSelect } from 'element-plus'
 import { marked } from 'marked'
 import {
   Archive,
@@ -351,12 +352,30 @@ onMounted(() => {
     <section class="chat-workspace">
       <header class="topbar">
         <button class="icon-button mobile-only" title="打开菜单" @click="sidebarOpen = true"><Menu :size="20" /></button>
-        <label class="model-selector">
-          <select v-model="selectedModel" :disabled="isGenerating" aria-label="选择模型">
-            <option v-if="!models.length" value="deepseek-chat">DeepSeek Chat</option>
-            <option v-for="model in models" :key="model.key" :value="model.key">{{ model.display_name }}</option>
-          </select>
-        </label>
+        <div class="model-selector">
+          <ElSelect
+            v-model="selectedModel"
+            class="model-select"
+            :disabled="isGenerating"
+            popper-class="model-select-dropdown"
+            aria-label="选择模型"
+          >
+            <template #prefix><Bot :size="16" /></template>
+            <ElOption v-if="!models.length" label="DeepSeek Chat" value="deepseek-chat" />
+            <ElOption
+              v-for="model in models"
+              :key="model.key"
+              :label="model.display_name"
+              :value="model.key"
+            >
+              <div class="model-option">
+                <span class="model-option-icon"><Bot :size="15" /></span>
+                <span>{{ model.display_name }}</span>
+                <small>{{ model.capabilities.includes('vision') ? '多模态' : '对话' }}</small>
+              </div>
+            </ElOption>
+          </ElSelect>
+        </div>
         <div class="topbar-actions">
           <span class="service-status" :class="{ offline: !serviceOnline }"><span></span>{{ serviceOnline ? '服务正常' : '服务离线' }}</span>
           <span v-if="usage.total" class="token-usage">{{ usage.total }} tokens</span>

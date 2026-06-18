@@ -120,9 +120,27 @@ button:disabled { cursor: not-allowed; }
 
 .chat-workspace { min-width: 0; flex: 1; display: flex; flex-direction: column; background: #ffffff; }
 .topbar { height: 56px; flex: 0 0 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: rgba(255, 255, 255, 0.96); border-bottom: 1px solid #eeeeee; }
-.model-selector { height: 36px; display: flex; align-items: center; padding: 0 8px; border-radius: 7px; }
-.model-selector:hover { background: #f3f3f3; }
-.model-selector select { max-width: 230px; color: #2f2f2f; background: transparent; border: 0; outline: 0; font-size: 15px; font-weight: 650; cursor: pointer; }
+.model-selector { height: 38px; display: flex; align-items: center; }
+.model-select { width: 210px; }
+.model-select .el-select__wrapper {
+  min-height: 36px;
+  padding: 4px 10px;
+  background: transparent;
+  border-radius: 7px;
+  box-shadow: none;
+}
+.model-select .el-select__wrapper:hover { background: #f3f3f3; box-shadow: none; }
+.model-select .el-select__wrapper.is-focused { background: #f3f3f3; box-shadow: 0 0 0 1px #d0d0d0 inset; }
+.model-select .el-select__selected-item { color: #2f2f2f; font-size: 15px; font-weight: 650; }
+.model-select .el-select__prefix { color: #178f6f; }
+.model-select .el-select__caret { color: #797979; }
+.model-option { width: 100%; display: flex; align-items: center; gap: 9px; }
+.model-option-icon { width: 25px; height: 25px; display: grid; place-items: center; flex: 0 0 auto; color: #ffffff; background: #178f6f; border-radius: 6px; }
+.model-option small { margin-left: auto; color: #9a9a9a; font-size: 11px; }
+.model-select-dropdown.el-popper { border: 1px solid #dedede; border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12); }
+.model-select-dropdown .el-select-dropdown__item { height: 42px; margin: 3px 5px; padding: 0 9px; border-radius: 6px; color: #444444; }
+.model-select-dropdown .el-select-dropdown__item.is-hovering { background: #f1f1f1; }
+.model-select-dropdown .el-select-dropdown__item.is-selected { color: #126f57; background: #edf6f3; font-weight: 600; }
 .topbar-actions { display: flex; align-items: center; gap: 3px; }
 .service-status { height: 26px; display: flex; align-items: center; gap: 6px; margin-right: 4px; padding: 0 8px; color: #6d6d6d; background: #f6f6f6; border: 1px solid #e6e6e6; border-radius: 7px; font-size: 11px; }
 .service-status span { width: 7px; height: 7px; background: #1f9d72; border-radius: 50%; }
@@ -206,7 +224,8 @@ button:disabled { cursor: not-allowed; }
   .topbar { padding: 0 9px; }
   .service-status, .token-usage { display: none; }
   .model-selector { margin-right: auto; }
-  .model-selector select { max-width: 155px; font-size: 14px; }
+  .model-select { width: 165px; }
+  .model-select .el-select__selected-item { font-size: 14px; }
   .conversation-area { padding: 24px 14px 14px; }
   .empty-state { margin-top: 0; }
   .empty-state h1 { font-size: 23px; }

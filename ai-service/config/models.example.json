@@ -1,0 +1,24 @@
+{
+  "models": [
+    {
+      "key": "local-chat",
+      "display_name": "本地对话模型",
+      "provider": "vllm",
+      "base_url": "http://model-server:8000/v1",
+      "model_name": "/models/chat-model",
+      "capabilities": ["chat"],
+      "enabled": true,
+      "context_window": 32768
+    },
+    {
+      "key": "local-vision",
+      "display_name": "本地视觉模型",
+      "provider": "vllm",
+      "base_url": "http://vision-server:8000/v1",
+      "model_name": "/models/vision-model",
+      "capabilities": ["chat", "vision"],
+      "enabled": false,
+      "context_window": 32768
+    }
+  ]
+}

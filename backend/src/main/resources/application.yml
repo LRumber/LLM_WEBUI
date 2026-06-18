@@ -1,0 +1,35 @@
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
+
+spring:
+  application:
+    name: lm-platform-backend
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/lm_platform}
+    username: ${POSTGRES_USER:lm_platform}
+    password: ${POSTGRES_PASSWORD:change-me}
+  flyway:
+    enabled: true
+  jackson:
+    default-property-inclusion: non_null
+
+platform:
+  oauth2:
+    server: ${OAUTH2_SERVER:http://172.16.4.250:30801}
+    client-id: ${OAUTH2_CLIENT_ID:replace-me}
+    client-secret: ${OAUTH2_CLIENT_SECRET:replace-me}
+    redirect-uri: ${OAUTH2_REDIRECT_URI:http://localhost:8080/api/auth/oauth2/callback}
+  ai-service:
+    base-url: ${AI_SERVICE_BASE_URL:http://localhost:8001}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus

@@ -1,0 +1,14 @@
+{
+  "models": [
+    {
+      "key": "deepseek-chat",
+      "display_name": "DeepSeek Chat",
+      "provider": "deepseek",
+      "base_url": "https://api.deepseek.com",
+      "model_name": "deepseek-chat",
+      "capabilities": ["chat"],
+      "enabled": true,
+      "context_window": 65536
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 """Pydantic contracts shared by model registration and streaming-chat endpoints."""
 
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -61,10 +61,44 @@ class ModelHealthResponse(BaseModel):
     detail: str | None = None
 
 
+class TextContentPart(BaseModel):
+    """Text segment inside an OpenAI-compatible multimodal message."""
+
+    type: Literal["text"] = "text"
+    text: str = Field(min_length=1, max_length=100_000)
+
+
+class ImageUrlValue(BaseModel):
+    """Image reference accepted by local vision models as URL or data URL."""
+
+    url: str
+    detail: Literal["auto", "low", "high"] = "auto"
+
+
+class ImageContentPart(BaseModel):
+    """OpenAI-compatible image segment for vision-capable model endpoints."""
+
+    type: Literal["image_url"] = "image_url"
+    image_url: ImageUrlValue
+
+
+MessageContentPart = Annotated[TextContentPart | ImageContentPart, Field(discriminator="type")]
+
+
 class ChatMessage(BaseModel):
-    """Single role-bound message accepted by an OpenAI-compatible chat model."""
+    """Single role-bound text or multimodal message accepted by compatible models."""
     role: Literal["system", "user", "assistant"]
-    content: str = Field(min_length=1, max_length=100_000)
+    content: str | list[MessageContentPart]
+
+
+class ParsedDocument(BaseModel):
+    """Normalized extraction result persisted by the platform document pipeline."""
+
+    media_type: str
+    text: str
+    page_count: int | None = None
+    tables: list[list[list[str]]] = Field(default_factory=list)
+    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
 
 
 class ChatRequest(BaseModel):

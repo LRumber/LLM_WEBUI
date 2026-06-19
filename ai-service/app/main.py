@@ -3,17 +3,19 @@
 import json
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.chat import ChatConfigurationError, ChatGateway, ModelBusyError, UpstreamChatError
 from app.config import get_settings
-from app.models import ChatRequest, HealthResponse, ModelEndpoint, ModelHealthResponse
+from app.documents import DocumentParseError, DocumentParser
+from app.models import ChatRequest, HealthResponse, ModelEndpoint, ModelHealthResponse, ParsedDocument
 from app.registry import ModelRegistry
 
 settings = get_settings()
 registry = ModelRegistry(settings.model_config_path)
 chat_gateway = ChatGateway(settings)
+document_parser = DocumentParser()
 
 
 @asynccontextmanager
@@ -116,3 +118,12 @@ def stream_chat(request: ChatRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/v1/documents/parse", response_model=ParsedDocument)
+async def parse_document(file: UploadFile = File(...)) -> ParsedDocument:
+    """Parse one bounded document using only local libraries and OCR services."""
+    try:
+        return await document_parser.parse(file)
+    except DocumentParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

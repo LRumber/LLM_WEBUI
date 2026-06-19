@@ -25,6 +25,7 @@ import {
   Settings,
   ShieldCheck,
   Square,
+  RotateCcw,
   Trash2,
   Users,
 } from 'lucide-vue-next'
@@ -279,6 +280,34 @@ const branchConversation = async (message: ChatMessage) => {
   await loadConversations()
   const branch = conversations.value.find((item) => item.id === result.conversationId)
   if (branch) await openConversation(branch)
+}
+
+/** Streams a replacement for one persisted assistant answer without adding a duplicate user turn. */
+const regenerateMessage = async (message: ChatMessage, index: number) => {
+  if (!conversationId.value || !message.id || message.role !== 'assistant' || isGenerating.value) return
+  message.content = ''
+  isGenerating.value = true
+  abortController = new AbortController()
+  try {
+    const response = await fetch(
+      `/api/conversations/${conversationId.value}/messages/${message.id}/regenerate`,
+      {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: selectedModel.value }), signal: abortController.signal,
+      },
+    )
+    if (!response.ok) throw new Error(`重新生成失败（${response.status}）`)
+    await consumeEventStream(response, index)
+  } catch (error) {
+    message.error = true
+    message.content = (error as Error).name === 'AbortError' ? '已停止生成。' : (error as Error).message
+  } finally {
+    isGenerating.value = false
+    abortController = null
+    await loadConversations()
+    const current = conversations.value.find((item) => item.id === conversationId.value)
+    if (current) await openConversation(current)
+  }
 }
 
 /** Soft-deletes one conversation after an explicit destructive-action confirmation. */
@@ -612,6 +641,7 @@ onMounted(() => {
                   <Check v-if="copiedMessageIndex === index" :size="15" />
                   <Copy v-else :size="15" />
                 </button>
+                <button v-if="message.role === 'assistant' && message.id" class="message-action" type="button" title="重新生成" @click="regenerateMessage(message, index)"><RotateCcw :size="15" /></button>
                 <button v-if="message.role === 'user' && message.id" class="message-action" type="button" title="编辑消息" @click="editMessage(message)"><Pencil :size="15" /></button>
                 <button v-if="message.id" class="message-action" type="button" title="从此处分支" @click="branchConversation(message)"><GitBranch :size="15" /></button>
                 <small v-if="message.editedAt">已编辑</small>

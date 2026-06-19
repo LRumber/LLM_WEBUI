@@ -165,6 +165,28 @@ public class ConversationRepository {
         return branchId;
     }
 
+    /** Supersedes one assistant answer and every later message before a replacement is generated. */
+    @Transactional
+    public boolean prepareAssistantRegeneration(UUID conversationId, UUID messageId, long userId) {
+        Integer sequence = jdbc.query("""
+                SELECT cm.sequence_no FROM conversation_message cm
+                JOIN conversation c ON c.id = cm.conversation_id
+                WHERE cm.id = ? AND cm.conversation_id = ? AND cm.role = 'assistant'
+                  AND cm.superseded_at IS NULL AND c.user_id = ? AND c.deleted_at IS NULL
+                """, (rs, rowNum) -> rs.getInt("sequence_no"), messageId, conversationId, userId)
+                .stream().findFirst().orElse(null);
+        if (sequence == null) {
+            return false;
+        }
+        jdbc.update("""
+                UPDATE conversation_message SET superseded_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE conversation_id = ? AND sequence_no >= ? AND superseded_at IS NULL
+                """, conversationId, sequence);
+        jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
+        return true;
+    }
+
     /** Lists enabled system templates and personal templates owned by the current user. */
     public List<PromptTemplate> listPromptTemplates(long userId) {
         return jdbc.query("""

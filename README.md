@@ -96,7 +96,7 @@ Vue -> Spring Boot -> PostgreSQL
 
 Spring Boot 创建会话并保存用户消息，从 PostgreSQL 加载历史上下文，再将 FastAPI 的 SSE 增量逐块转发给前端。生成完成后保存助手消息、Token、响应耗时和每日用量汇总。
 
-对话上下文按 `AI_MAX_CONTEXT_MESSAGES` 截取最近的有效消息；用户编辑消息时，后续消息保留为审计用的 superseded 版本。任意有效消息均可创建独立会话分支，系统和个人提示词模板在首轮作为持久化 system 消息写入。
+对话上下文按 `AI_MAX_CONTEXT_MESSAGES` 截取最近的有效消息；用户编辑消息时，后续消息保留为审计用的 superseded 版本。任意有效消息均可创建独立会话分支；重新生成会保留旧回答并从原问题上下文流式生成替代版本。系统和个人提示词模板在首轮作为持久化 system 消息写入。
 
 ## 第一阶段范围
 

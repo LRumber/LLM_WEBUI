@@ -7,6 +7,7 @@ import com.lmplatform.chat.model.ConversationMessage;
 import com.lmplatform.chat.model.ConversationSummary;
 import com.lmplatform.chat.model.EditMessageRequest;
 import com.lmplatform.chat.model.PromptTemplate;
+import com.lmplatform.chat.model.RegenerateMessageRequest;
 import com.lmplatform.chat.model.RenameConversationRequest;
 import com.lmplatform.chat.repository.ConversationRepository;
 import com.lmplatform.chat.service.ChatService;
@@ -126,6 +127,25 @@ public class ChatController {
     @GetMapping("/prompt-templates")
     public List<PromptTemplate> promptTemplates() {
         return repository.listPromptTemplates(repository.ensureDevelopmentUser());
+    }
+
+    /** Replaces one assistant answer while preserving its previous version for audit. */
+    @PostMapping(
+            value = "/conversations/{conversationId}/messages/{messageId}/regenerate",
+            produces = MediaType.TEXT_EVENT_STREAM_VALUE
+    )
+    public ResponseEntity<StreamingResponseBody> regenerate(
+            @PathVariable UUID conversationId,
+            @PathVariable UUID messageId,
+            @Valid @RequestBody RegenerateMessageRequest request
+    ) {
+        StreamingResponseBody body = output ->
+                chatService.regenerate(conversationId, messageId, request.model(), output);
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .header("Cache-Control", "no-cache")
+                .header("X-Accel-Buffering", "no")
+                .body(body);
     }
 
     private record ConversationBranchResponse(UUID conversationId) {

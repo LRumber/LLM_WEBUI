@@ -74,4 +74,43 @@ class ChatServiceTest {
         );
         verify(titleGenerationService).generateAsync(conversationId, 1L, "你好", "你好");
     }
+
+    /** Confirms regeneration supersedes the selected answer and does not append another user turn. */
+    @Test
+    void regeneratesAssistantFromExistingContext() throws Exception {
+        ConversationRepository repository = mock(ConversationRepository.class);
+        AiServiceClient client = mock(AiServiceClient.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        ChatService service = new ChatService(
+                repository, client, objectMapper, mock(TitleGenerationService.class),
+                new AiServiceProperties("http://localhost:8001", 150, "deepseek-chat", 40)
+        );
+        UUID conversationId = UUID.randomUUID();
+        UUID oldAssistantId = UUID.randomUUID();
+        UUID replacementId = UUID.randomUUID();
+        when(repository.ensureDevelopmentUser()).thenReturn(1L);
+        when(repository.prepareAssistantRegeneration(conversationId, oldAssistantId, 1L)).thenReturn(true);
+        when(repository.appendMessage(conversationId, "assistant", "", "generating"))
+                .thenReturn(replacementId);
+        when(repository.modelMessages(conversationId, 40))
+                .thenReturn(List.of(Map.of("role", "user", "content", "你好")));
+        doAnswer(invocation -> {
+            AiServiceClient.EventConsumer consumer = invocation.getArgument(2);
+            consumer.accept(objectMapper.readTree("{\"type\":\"delta\",\"content\":\"新回答\"}"));
+            consumer.accept(objectMapper.readTree("{\"type\":\"done\"}"));
+            return null;
+        }).when(client).streamChat(eq("deepseek-chat"), any(), any());
+
+        service.regenerate(
+                conversationId, oldAssistantId, "deepseek-chat", new ByteArrayOutputStream()
+        );
+
+        verify(repository).finishAssistantMessage(
+                replacementId, "新回答", "completed", 0, 0, null
+        );
+        verify(repository).recordCompletedUsage(
+                any(UUID.class), eq(1L), eq(conversationId), eq("deepseek-chat"),
+                eq(0), eq(0), any(), anyInt(), eq(false)
+        );
+    }
 }

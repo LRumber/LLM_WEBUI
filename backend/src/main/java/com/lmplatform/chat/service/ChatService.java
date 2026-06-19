@@ -64,10 +64,42 @@ public class ChatService {
         UUID assistantMessageId = repository.appendMessage(
                 conversationId, "assistant", "", "generating"
         );
+        streamAssistant(
+                userId, conversationId, assistantMessageId, request.model(), newConversation,
+                newConversation ? request.content() : null, output
+        );
+    }
+
+    /** Supersedes an owned assistant answer and streams a replacement from the same prior context. */
+    public void regenerate(
+            UUID conversationId,
+            UUID assistantMessageId,
+            String model,
+            OutputStream output
+    ) throws IOException {
+        long userId = repository.ensureDevelopmentUser();
+        if (!repository.prepareAssistantRegeneration(
+                conversationId, assistantMessageId, userId
+        )) {
+            writeEvent(output, Map.of("type", "error", "message", "Assistant message not found"));
+            return;
+        }
+        UUID replacementId = repository.appendMessage(conversationId, "assistant", "", "generating");
+        streamAssistant(userId, conversationId, replacementId, model, false, null, output);
+    }
+
+    /** Runs the shared generation lifecycle for new turns and regenerated answers. */
+    private void streamAssistant(
+            long userId,
+            UUID conversationId,
+            UUID assistantMessageId,
+            String model,
+            boolean newConversation,
+            String firstPrompt,
+            OutputStream output
+    ) throws IOException {
         writeEvent(output, Map.of(
-                "type", "metadata",
-                "conversation_id", conversationId,
-                "message_id", assistantMessageId
+                "type", "metadata", "conversation_id", conversationId, "message_id", assistantMessageId
         ));
 
         StringBuilder assistantContent = new StringBuilder();
@@ -78,7 +110,7 @@ public class ChatService {
 
         try {
             aiServiceClient.streamChat(
-                    request.model(),
+                    model,
                     repository.modelMessages(conversationId, maxContextMessages),
                     event -> handleAiEvent(event, output, assistantContent, inputTokens, outputTokens, firstTokenAt)
             );
@@ -98,7 +130,7 @@ public class ChatService {
                     UUID.randomUUID(),
                     userId,
                     conversationId,
-                    request.model(),
+                    model,
                     inputTokens.get(),
                     outputTokens.get(),
                     firstTokenMs,
@@ -110,7 +142,7 @@ public class ChatService {
                 titleGenerationService.generateAsync(
                         conversationId,
                         userId,
-                        request.content(),
+                        firstPrompt,
                         assistantContent.toString()
                 );
             }

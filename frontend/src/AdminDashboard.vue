@@ -14,6 +14,7 @@ import {
   Users,
   Zap,
 } from 'lucide-vue-next'
+import { adminPageMeta, resolveAdminPage } from './adminRouting'
 
 interface AdminOverview {
   userCount: number
@@ -103,6 +104,9 @@ const modelForm = ref<ModelRegistration>({
 })
 const templateForm = ref({ id: '', name: '', description: '', systemPrompt: '', enabled: true })
 
+const adminPage = computed(() => resolveAdminPage(window.location.pathname))
+const pageMeta = computed(() => adminPageMeta[adminPage.value])
+
 const maxDailyTokens = computed(() => {
   return Math.max(...dailyUsage.value.map((day) => day.inputTokens + day.outputTokens), 1)
 })
@@ -116,25 +120,28 @@ const formatDateTime = (value: string | null) => value
   ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
   : '尚未登录'
 
-const loadDashboard = async () => {
+/** Loads only the API data required by the current administration route. */
+const loadCurrentPage = async () => {
   loading.value = true
   loadError.value = false
   try {
-    const [overviewResponse, usageResponse, usersResponse] = await Promise.all([
-      fetch('/api/admin/overview'),
-      fetch('/api/admin/usage/daily?days=7'),
-      fetch('/api/admin/users'),
-    ])
-    if ([overviewResponse, usageResponse, usersResponse].some((response) => response.status === 401)) {
-      currentAdmin.value = null
-      return
+    if (adminPage.value === 'overview') {
+      const response = await fetch('/api/admin/overview')
+      if (!response.ok) throw new Error('Overview unavailable')
+      overview.value = await response.json()
+    } else if (adminPage.value === 'users') {
+      const response = await fetch('/api/admin/users')
+      if (!response.ok) throw new Error('Users unavailable')
+      users.value = await response.json()
+    } else if (adminPage.value === 'usage') {
+      const response = await fetch('/api/admin/usage/daily?days=7')
+      if (!response.ok) throw new Error('Usage unavailable')
+      dailyUsage.value = await response.json()
+    } else if (adminPage.value === 'models') {
+      await loadModels()
+    } else if (adminPage.value === 'prompts') {
+      await loadSystemTemplates()
     }
-    if (![overviewResponse, usageResponse, usersResponse].every((response) => response.ok)) {
-      throw new Error('Admin API unavailable')
-    }
-    overview.value = await overviewResponse.json()
-    dailyUsage.value = await usageResponse.json()
-    users.value = await usersResponse.json()
   } catch {
     loadError.value = true
   } finally {
@@ -167,7 +174,7 @@ const checkSession = async () => {
     const response = await fetch('/api/admin/auth/me')
     if (response.ok) {
       currentAdmin.value = await response.json()
-      await Promise.all([loadDashboard(), loadModels(), loadSystemTemplates()])
+      await loadCurrentPage()
     }
   } finally {
     sessionChecked.value = true
@@ -189,7 +196,7 @@ const login = async () => {
     }
     currentAdmin.value = await response.json()
     loginPassword.value = ''
-    await Promise.all([loadDashboard(), loadModels(), loadSystemTemplates()])
+    await loadCurrentPage()
   } catch {
     loginError.value = '无法连接管理服务'
   } finally {
@@ -328,11 +335,12 @@ onMounted(checkSession)
         <div><strong>智能工作台</strong><span>管理后台</span></div>
       </div>
       <nav aria-label="后台导航">
-        <a class="active" href="/admin"><LayoutDashboard :size="18" />概览</a>
-        <a href="#users"><Users :size="18" />用户管理</a>
-        <a href="#usage"><Activity :size="18" />用量统计</a>
-        <a href="#models"><Bot :size="18" />模型管理</a>
-        <span class="disabled"><Settings :size="18" />系统设置<small>待建设</small></span>
+        <a :class="{ active: adminPage === 'overview' }" href="/admin"><LayoutDashboard :size="18" />概览</a>
+        <a :class="{ active: adminPage === 'users' }" href="/admin/users"><Users :size="18" />用户管理</a>
+        <a :class="{ active: adminPage === 'usage' }" href="/admin/usage"><Activity :size="18" />用量统计</a>
+        <a :class="{ active: adminPage === 'models' }" href="/admin/models"><Bot :size="18" />模型管理</a>
+        <a :class="{ active: adminPage === 'prompts' }" href="/admin/prompts"><MessageSquare :size="18" />提示词模板</a>
+        <a :class="{ active: adminPage === 'settings' }" href="/admin/settings"><Settings :size="18" />系统设置</a>
       </nav>
       <div class="admin-sidebar-footer">
         <div><strong>{{ currentAdmin.displayName }}</strong><span>本地管理员</span></div>
@@ -343,22 +351,22 @@ onMounted(checkSession)
 
     <section class="admin-content">
       <header class="admin-topbar">
-        <div><h1>平台概览</h1><p>用户、对话与模型资源使用情况</p></div>
-        <button type="button" :disabled="loading" @click="loadDashboard">
+        <div><h1>{{ pageMeta[0] }}</h1><p>{{ pageMeta[1] }}</p></div>
+        <button type="button" :disabled="loading" @click="loadCurrentPage">
           <RefreshCw :size="16" :class="{ spinning: loading }" />刷新
         </button>
       </header>
 
       <div v-if="loadError" class="admin-error">暂时无法加载后台数据，请确认核心服务和数据库已启动。</div>
 
-      <div class="metric-grid" aria-label="平台指标">
+      <div v-if="adminPage === 'overview'" class="metric-grid" aria-label="平台指标">
         <article><span class="metric-icon green"><Users :size="20" /></span><div><small>平台用户</small><strong>{{ formatNumber(overview.userCount) }}</strong></div></article>
         <article><span class="metric-icon blue"><MessageSquare :size="20" /></span><div><small>有效会话</small><strong>{{ formatNumber(overview.conversationCount) }}</strong></div></article>
         <article><span class="metric-icon orange"><Zap :size="20" /></span><div><small>今日请求</small><strong>{{ formatNumber(overview.todayRequestCount) }}</strong></div></article>
         <article><span class="metric-icon purple"><Activity :size="20" /></span><div><small>今日 Token</small><strong>{{ formatNumber(overview.todayTokenCount) }}</strong></div></article>
       </div>
 
-      <section id="models" class="admin-panel model-panel">
+      <section v-if="adminPage === 'models'" class="admin-panel model-panel">
         <div class="panel-heading">
           <div><h2>模型管理</h2><p>动态注册 OpenAI 兼容端点、推理引擎与 GPU 并发参数</p></div>
           <button class="panel-action" type="button" @click="createModel">新增模型</button>
@@ -374,7 +382,7 @@ onMounted(checkSession)
         </div>
       </section>
 
-      <section class="admin-panel prompt-admin-panel">
+      <section v-if="adminPage === 'prompts'" class="admin-panel prompt-admin-panel">
         <div class="panel-heading"><div><h2>系统提示词模板</h2><p>所有用户可选择，只有后台管理员可以修改</p></div><button class="panel-action" type="button" @click="editSystemTemplate()">新增模板</button></div>
         <div class="prompt-admin-layout">
           <div class="prompt-admin-list">
@@ -390,7 +398,7 @@ onMounted(checkSession)
         </div>
       </section>
 
-      <div v-if="modelEditorOpen" class="model-editor-backdrop" @click.self="modelEditorOpen = false">
+      <div v-if="adminPage === 'models' && modelEditorOpen" class="model-editor-backdrop" @click.self="modelEditorOpen = false">
         <form class="model-editor" @submit.prevent="saveModel">
           <div class="panel-heading"><div><h2>{{ models.some((item) => item.key === modelForm.key) ? '编辑模型' : '新增模型' }}</h2><p>所有推理引擎必须提供 OpenAI 兼容端点</p></div><button class="editor-close" type="button" @click="modelEditorOpen = false">×</button></div>
           <div class="model-form-grid">
@@ -414,7 +422,7 @@ onMounted(checkSession)
         </form>
       </div>
 
-      <section id="usage" class="admin-panel usage-panel">
+      <section v-if="adminPage === 'usage'" class="admin-panel usage-panel">
         <div class="panel-heading"><div><h2>近 7 天用量</h2><p>每日输入与输出 Token 总量</p></div></div>
         <div class="usage-chart" :class="{ loading }">
           <div v-for="day in dailyUsage" :key="day.date" class="usage-column">
@@ -428,7 +436,7 @@ onMounted(checkSession)
         </div>
       </section>
 
-      <section id="users" class="admin-panel user-panel">
+      <section v-if="adminPage === 'users'" class="admin-panel user-panel">
         <div class="panel-heading"><div><h2>用户概况</h2><p>最近同步的 100 个影子用户及累计用量</p></div><span>{{ users.length }} 位用户</span></div>
         <div class="table-wrap">
           <table>
@@ -447,6 +455,11 @@ onMounted(checkSession)
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section v-if="adminPage === 'settings'" class="admin-panel settings-panel">
+        <div class="panel-heading"><div><h2>系统设置</h2><p>部署参数通过环境变量和离线配置文件管理</p></div></div>
+        <div class="settings-grid"><article><strong>认证模式</strong><span>本地管理员 + OAuth2 用户</span></article><article><strong>对象存储</strong><span>MinIO 私有 Bucket</span></article><article><strong>异步任务</strong><span>有界后台执行器</span></article><article><strong>配置原则</strong><span>密钥不写入浏览器或数据库明文</span></article></div>
       </section>
     </section>
   </main>
@@ -482,6 +495,7 @@ onMounted(checkSession)
 .usage-chart { min-height: 190px; display: flex; align-items: flex-end; gap: 14px; padding: 25px 8px 0; opacity: 1; transition: opacity .15s; }.usage-chart.loading { opacity: .45; }.usage-column { min-width: 0; height: 165px; display: flex; flex: 1; flex-direction: column; align-items: center; }.bar-area { width: min(44px, 70%); height: 112px; display: flex; align-items: flex-end; }.usage-bar { width: 100%; min-height: 4px; background: linear-gradient(180deg, #42a887, #197559); border-radius: 5px 5px 2px 2px; }.usage-column strong { margin-top: 8px; color: #59615e; font-size: 10px; }.usage-column span { margin-top: 5px; color: #949a98; font-size: 10px; }.empty-chart { width: 100%; align-self: center; color: #9aa09e; text-align: center; font-size: 12px; }
 .table-wrap { margin-top: 16px; overflow-x: auto; }table { width: 100%; border-collapse: collapse; font-size: 12px; }th { padding: 10px 12px; color: #8a918e; background: #f7f8f8; font-size: 10px; font-weight: 600; text-align: left; }td { padding: 12px; color: #59615e; border-bottom: 1px solid #eef0ef; }.table-user { display: flex; align-items: center; gap: 9px; }.table-user > span { width: 27px; height: 27px; display: grid; place-items: center; color: #fff; background: #527a6d; border-radius: 50%; font-size: 10px; }.table-user strong { color: #303633; font-size: 12px; }.status-pill { padding: 3px 7px; color: #197357; background: #e9f5f0; border-radius: 10px; font-size: 10px; }.status-pill.inactive { color: #8b4941; background: #f8eae8; }.empty-table { padding: 28px; color: #969c99; text-align: center; }
 .admin-toggle { display: flex; align-items: center; gap: 6px; padding: 0; color: #7d8582; background: transparent; border: 0; font-size: 10px; }.admin-toggle > span { position: relative; width: 26px; height: 15px; background: #cdd2d0; border-radius: 8px; transition: background .15s; }.admin-toggle > span::after { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; content: ''; background: #fff; border-radius: 50%; transition: transform .15s; }.admin-toggle.enabled { color: #176f55; }.admin-toggle.enabled > span { background: #27856a; }.admin-toggle.enabled > span::after { transform: translateX(11px); }
+.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }.settings-grid article { padding: 15px; background: #f7f8f8; border: 1px solid #e6e8e7; border-radius: 7px; }.settings-grid strong, .settings-grid span { display: block; }.settings-grid strong { color: #3c4440; font-size: 11px; }.settings-grid span { margin-top: 6px; color: #838b87; font-size: 10px; }
 @media (max-width: 900px) { .admin-sidebar { width: 188px; flex-basis: 188px; }.admin-brand img { width: 62px; }.metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.model-grid { grid-template-columns: 1fr 1fr; }.admin-content { padding: 24px 20px 36px; } }
-@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-grid, .model-form-grid, .prompt-admin-layout { grid-template-columns: 1fr; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
+@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-grid, .model-form-grid, .prompt-admin-layout, .settings-grid { grid-template-columns: 1fr; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
 </style>

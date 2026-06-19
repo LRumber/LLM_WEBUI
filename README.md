@@ -151,6 +151,8 @@ npm run dev
 
 首次启用管理后台前，在 `.env` 配置 `ADMIN_INITIAL_USERNAME`、`ADMIN_INITIAL_PASSWORD` 和 `ADMIN_INITIAL_DISPLAY_NAME`。Spring Boot 启动后会创建首个本地管理员，之后不会用环境变量覆盖已有账号密码。管理后台地址为 `http://127.0.0.1:5173/admin`。
 
+管理后台采用独立模块地址：`/admin` 概览、`/admin/users` 用户、`/admin/usage` 用量、`/admin/models` 模型、`/admin/prompts` 提示词以及 `/admin/settings` 系统设置。各页面共用管理会话，但只加载当前模块数据。
+
 首轮对话创建时先使用用户问题生成临时标题，首轮回答保存后再异步生成 AI 标题。标题模型由 `AI_TITLE_MODEL` 独立配置，目前与主对话共用 `deepseek-chat`；后续注册本地轻量模型后，只需将该变量改为对应模型 key。用户手动修改的标题会标记为 `manual`，异步任务不会覆盖。
 
 ## 开发原则

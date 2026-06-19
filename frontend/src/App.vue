@@ -80,6 +80,13 @@ interface PromptTemplate {
   scope: string
 }
 
+interface UploadedFile {
+  id: string
+  originalName: string
+  mediaType: string
+  status: 'uploaded' | 'processing' | 'ready' | 'failed'
+}
+
 // Page and conversation state stays local; durable data always comes from Spring Boot.
 const isWorkspace = computed(() => window.location.pathname.startsWith('/app'))
 const isAdmin = computed(() => window.location.pathname.startsWith('/admin'))
@@ -103,6 +110,9 @@ const historySearchOpen = ref(false)
 const historySearchInput = ref<HTMLInputElement | null>(null)
 const promptTemplates = ref<PromptTemplate[]>([])
 const selectedTemplateId = ref('')
+const fileInput = ref<HTMLInputElement | null>(null)
+const attachments = ref<UploadedFile[]>([])
+const uploadingFile = ref(false)
 let abortController: AbortController | null = null
 
 // Configure GitHub-flavored Markdown once; every rendered result is sanitized below.
@@ -187,6 +197,25 @@ const loadPromptTemplates = async () => {
     if (response.ok) promptTemplates.value = await response.json()
   } catch {
     promptTemplates.value = []
+  }
+}
+
+/** Uploads selected files to private object storage before linking them to a chat message. */
+const uploadFiles = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const files = [...(input.files ?? [])]
+  if (!files.length) return
+  uploadingFile.value = true
+  try {
+    for (const file of files.slice(0, 20 - attachments.value.length)) {
+      const body = new FormData()
+      body.append('file', file)
+      const response = await fetch('/api/files', { method: 'POST', body })
+      if (response.ok) attachments.value.push(await response.json())
+    }
+  } finally {
+    uploadingFile.value = false
+    input.value = ''
   }
 }
 
@@ -397,6 +426,7 @@ const sendPrompt = async (preset?: string) => {
         model: selectedModel.value,
         content,
         templateId: isFirstMessage && selectedTemplateId.value ? selectedTemplateId.value : null,
+        attachmentIds: attachments.value.map((file) => file.id),
       }),
       signal: abortController.signal,
     })
@@ -408,6 +438,7 @@ const sendPrompt = async (preset?: string) => {
       throw new Error(detail || `请求失败（${response.status}）`)
     }
     await consumeEventStream(response, assistantIndex)
+    attachments.value = []
   } catch (error) {
     const assistant = messages.value[assistantIndex]
     if ((error as Error).name === 'AbortError') {
@@ -439,6 +470,7 @@ const newConversation = () => {
   nextTick(resizeComposer)
   usage.value = { prompt: 0, completion: 0, total: 0 }
   selectedTemplateId.value = ''
+  attachments.value = []
 }
 
 /** Implements Enter-to-send while preserving Shift+Enter for multiline input. */
@@ -654,6 +686,9 @@ onMounted(() => {
       <footer class="composer-wrap">
         <!-- The composer owns file/voice placeholders, cancellation, and keyboard submission. -->
         <div class="composer">
+          <div v-if="attachments.length" class="attachment-list">
+            <span v-for="file in attachments" :key="file.id"><Paperclip :size="12" />{{ file.originalName }}<button type="button" title="移除附件" @click="attachments = attachments.filter((item) => item.id !== file.id)">×</button></span>
+          </div>
           <textarea
             ref="promptInput"
             v-model="prompt"
@@ -669,7 +704,8 @@ onMounted(() => {
                 <option value="">默认提示词</option>
                 <option v-for="template in promptTemplates" :key="template.id" :value="template.id">{{ template.name }}</option>
               </select>
-              <button class="icon-button" title="上传文件或图片" disabled><Paperclip :size="19" /></button>
+              <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
+              <button class="icon-button" type="button" title="上传文件或图片" :disabled="uploadingFile" @click="fileInput?.click()"><Paperclip :size="19" /></button>
               <button class="icon-button" title="语音输入" disabled><Mic :size="19" /></button>
               <button class="knowledge-button" type="button" disabled><Library :size="16" />知识库</button>
             </div>

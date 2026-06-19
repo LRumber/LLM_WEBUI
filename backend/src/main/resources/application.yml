@@ -43,6 +43,12 @@ platform:
     title-model: ${AI_TITLE_MODEL:deepseek-chat}
     # Bound history independently from model token limits; provider tokenization remains authoritative.
     max-context-messages: ${AI_MAX_CONTEXT_MESSAGES:40}
+  object-storage:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ROOT_USER:lm_platform}
+    secret-key: ${MINIO_ROOT_PASSWORD:change-me-now}
+    bucket: ${MINIO_BUCKET:lm-platform-files}
+    max-file-bytes: ${MAX_UPLOAD_BYTES:104857600}
 
 # Expose only the operational endpoints required by local monitoring.
 management:

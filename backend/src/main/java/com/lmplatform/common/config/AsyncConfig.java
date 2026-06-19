@@ -19,4 +19,13 @@ public class AsyncConfig {
         executor.setConcurrencyLimit(4);
         return executor;
     }
+
+    /** Creates an isolated bounded executor for memory- and CPU-heavy document parsing jobs. */
+    @Bean("fileTaskExecutor")
+    Executor fileTaskExecutor() {
+        SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor("file-processor-");
+        executor.setVirtualThreads(true);
+        executor.setConcurrencyLimit(2);
+        return executor;
+    }
 }

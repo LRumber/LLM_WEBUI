@@ -13,7 +13,9 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Component;
+import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.web.client.RestClient;
 
 /** HTTP boundary between the Java business service and the Python AI gateway. */
@@ -75,6 +77,29 @@ public class AiServiceClient {
                 .accept(MediaType.APPLICATION_JSON)
                 .retrieve()
                 .body(String.class);
+    }
+
+    /** Sends one in-memory object to the isolated parser and returns normalized extraction JSON. */
+    public JsonNode parseDocument(byte[] content, String filename, String mediaType) {
+        MultipartBodyBuilder body = new MultipartBodyBuilder();
+        body.part("file", new ByteArrayResource(content) {
+            @Override
+            public String getFilename() {
+                return filename;
+            }
+        }).contentType(MediaType.parseMediaType(mediaType));
+        String response = restClient.post()
+                .uri("/v1/documents/parse")
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .accept(MediaType.APPLICATION_JSON)
+                .body(body.build())
+                .retrieve()
+                .body(String.class);
+        try {
+            return objectMapper.readTree(response);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Document parser returned invalid JSON", exception);
+        }
     }
 
     /**

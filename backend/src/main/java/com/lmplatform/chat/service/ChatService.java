@@ -60,7 +60,10 @@ public class ChatService {
                     repository.appendMessage(conversationId, "system", template, "completed")
             );
         }
-        repository.appendMessage(conversationId, "user", request.content(), "completed");
+        UUID userMessageId = repository.appendMessage(
+                conversationId, "user", request.content(), "completed"
+        );
+        repository.attachFiles(userMessageId, request.attachmentIds(), userId);
         UUID assistantMessageId = repository.appendMessage(
                 conversationId, "assistant", "", "generating"
         );

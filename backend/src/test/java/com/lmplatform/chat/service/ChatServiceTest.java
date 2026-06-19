@@ -60,7 +60,7 @@ class ChatServiceTest {
         }).when(client).streamChat(eq("deepseek-chat"), any(), any());
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        service.stream(new ChatStreamRequest(null, "deepseek-chat", "你好", null), output);
+        service.stream(new ChatStreamRequest(null, "deepseek-chat", "你好", null, List.of()), output);
 
         String stream = output.toString(StandardCharsets.UTF_8);
         assertThat(stream).contains("metadata", conversationId.toString(), "\"content\":\"你\"");

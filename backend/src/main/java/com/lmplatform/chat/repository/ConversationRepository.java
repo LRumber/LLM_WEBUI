@@ -83,11 +83,18 @@ public class ConversationRepository {
     public List<Map<String, String>> modelMessages(UUID conversationId, int limit) {
         return jdbc.query("""
                 SELECT role, content FROM (
-                    SELECT role, content, sequence_no
-                    FROM conversation_message
-                    WHERE conversation_id = ? AND status = 'completed'
-                      AND superseded_at IS NULL AND content <> ''
-                    ORDER BY sequence_no DESC LIMIT ?
+                    SELECT cm.role,
+                           cm.content || COALESCE((
+                               SELECT string_agg(E'\n\n[附件: ' || fa.original_name || E']\n' ||
+                                                 COALESCE(fa.extracted_text, ''), '' ORDER BY ma.position)
+                               FROM message_attachment ma JOIN file_asset fa ON fa.id = ma.file_id
+                               WHERE ma.message_id = cm.id AND fa.status = 'ready'
+                           ), '') AS content,
+                           cm.sequence_no
+                    FROM conversation_message cm
+                    WHERE cm.conversation_id = ? AND cm.status = 'completed'
+                      AND cm.superseded_at IS NULL AND cm.content <> ''
+                    ORDER BY cm.sequence_no DESC LIMIT ?
                 ) recent_messages ORDER BY sequence_no
                 """, (rs, rowNum) -> Map.of(
                 "role", rs.getString("role"),
@@ -98,6 +105,20 @@ public class ConversationRepository {
     /** Preserves the legacy unbounded call for title generation and focused unit tests. */
     public List<Map<String, String>> modelMessages(UUID conversationId) {
         return modelMessages(conversationId, 100);
+    }
+
+    /** Links only ready or uploaded files owned by the same user to one newly persisted message. */
+    public void attachFiles(UUID messageId, List<UUID> fileIds, long userId) {
+        if (fileIds == null || fileIds.isEmpty()) {
+            return;
+        }
+        for (int index = 0; index < fileIds.size(); index++) {
+            jdbc.update("""
+                    INSERT INTO message_attachment (message_id, file_id, position)
+                    SELECT ?, id, ? FROM file_asset WHERE id = ? AND owner_user_id = ?
+                    ON CONFLICT DO NOTHING
+                    """, messageId, index, fileIds.get(index), userId);
+        }
     }
 
     /** Edits an owned user message and supersedes later messages instead of deleting audit history. */

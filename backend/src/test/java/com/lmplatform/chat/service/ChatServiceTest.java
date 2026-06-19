@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lmplatform.chat.client.AiServiceClient;
+import com.lmplatform.chat.config.AiServiceProperties;
 import com.lmplatform.chat.model.ChatStreamRequest;
 import com.lmplatform.chat.repository.ConversationRepository;
 import java.io.ByteArrayOutputStream;
@@ -30,7 +31,10 @@ class ChatServiceTest {
         AiServiceClient client = mock(AiServiceClient.class);
         TitleGenerationService titleGenerationService = mock(TitleGenerationService.class);
         ObjectMapper objectMapper = new ObjectMapper();
-        ChatService service = new ChatService(repository, client, objectMapper, titleGenerationService);
+        ChatService service = new ChatService(
+                repository, client, objectMapper, titleGenerationService,
+                new AiServiceProperties("http://localhost:8001", 150, "deepseek-chat", 40)
+        );
         UUID conversationId = UUID.randomUUID();
         UUID userMessageId = UUID.randomUUID();
         UUID assistantMessageId = UUID.randomUUID();
@@ -41,7 +45,7 @@ class ChatServiceTest {
                 .thenReturn(userMessageId);
         when(repository.appendMessage(conversationId, "assistant", "", "generating"))
                 .thenReturn(assistantMessageId);
-        when(repository.modelMessages(conversationId))
+        when(repository.modelMessages(conversationId, 40))
                 .thenReturn(List.of(Map.of("role", "user", "content", "你好")));
 
         doAnswer(invocation -> {
@@ -56,7 +60,7 @@ class ChatServiceTest {
         }).when(client).streamChat(eq("deepseek-chat"), any(), any());
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        service.stream(new ChatStreamRequest(null, "deepseek-chat", "你好"), output);
+        service.stream(new ChatStreamRequest(null, "deepseek-chat", "你好", null), output);
 
         String stream = output.toString(StandardCharsets.UTF_8);
         assertThat(stream).contains("metadata", conversationId.toString(), "\"content\":\"你\"");

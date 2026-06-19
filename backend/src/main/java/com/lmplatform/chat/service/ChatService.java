@@ -3,6 +3,7 @@ package com.lmplatform.chat.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lmplatform.chat.client.AiServiceClient;
+import com.lmplatform.chat.config.AiServiceProperties;
 import com.lmplatform.chat.model.ChatStreamRequest;
 import com.lmplatform.chat.repository.ConversationRepository;
 import java.io.IOException;
@@ -22,17 +23,20 @@ public class ChatService {
     private final AiServiceClient aiServiceClient;
     private final ObjectMapper objectMapper;
     private final TitleGenerationService titleGenerationService;
+    private final int maxContextMessages;
 
     public ChatService(
             ConversationRepository repository,
             AiServiceClient aiServiceClient,
             ObjectMapper objectMapper,
-            TitleGenerationService titleGenerationService
+            TitleGenerationService titleGenerationService,
+            AiServiceProperties properties
     ) {
         this.repository = repository;
         this.aiServiceClient = aiServiceClient;
         this.objectMapper = objectMapper;
         this.titleGenerationService = titleGenerationService;
+        this.maxContextMessages = Math.max(2, properties.maxContextMessages());
     }
 
     /**
@@ -50,6 +54,12 @@ public class ChatService {
             return;
         }
 
+        if (newConversation) {
+            // Persist the selected system instruction so every future context reconstruction is deterministic.
+            repository.findPromptTemplate(request.templateId(), userId).ifPresent(template ->
+                    repository.appendMessage(conversationId, "system", template, "completed")
+            );
+        }
         repository.appendMessage(conversationId, "user", request.content(), "completed");
         UUID assistantMessageId = repository.appendMessage(
                 conversationId, "assistant", "", "generating"
@@ -69,7 +79,7 @@ public class ChatService {
         try {
             aiServiceClient.streamChat(
                     request.model(),
-                    repository.modelMessages(conversationId),
+                    repository.modelMessages(conversationId, maxContextMessages),
                     event -> handleAiEvent(event, output, assistantContent, inputTokens, outputTokens, firstTokenAt)
             );
             int durationMs = elapsedMs(startedAt);

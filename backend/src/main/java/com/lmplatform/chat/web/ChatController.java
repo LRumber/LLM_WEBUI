@@ -2,8 +2,11 @@ package com.lmplatform.chat.web;
 
 import com.lmplatform.chat.client.AiServiceClient;
 import com.lmplatform.chat.model.ChatStreamRequest;
+import com.lmplatform.chat.model.BranchConversationRequest;
 import com.lmplatform.chat.model.ConversationMessage;
 import com.lmplatform.chat.model.ConversationSummary;
+import com.lmplatform.chat.model.EditMessageRequest;
+import com.lmplatform.chat.model.PromptTemplate;
 import com.lmplatform.chat.model.RenameConversationRequest;
 import com.lmplatform.chat.repository.ConversationRepository;
 import com.lmplatform.chat.service.ChatService;
@@ -91,5 +94,40 @@ public class ChatController {
         return repository.softDeleteConversation(conversationId, userId)
                 ? ResponseEntity.noContent().build()
                 : ResponseEntity.notFound().build();
+    }
+
+    /** Edits one user message and preserves later history as superseded audit records. */
+    @PatchMapping("/conversations/{conversationId}/messages/{messageId}")
+    public ResponseEntity<Void> editMessage(
+            @PathVariable UUID conversationId,
+            @PathVariable UUID messageId,
+            @Valid @RequestBody EditMessageRequest request
+    ) {
+        long userId = repository.ensureDevelopmentUser();
+        return repository.editUserMessage(conversationId, messageId, userId, request.content())
+                ? ResponseEntity.noContent().build()
+                : ResponseEntity.notFound().build();
+    }
+
+    /** Creates a durable branch through the selected active message. */
+    @PostMapping("/conversations/{conversationId}/branches")
+    public ResponseEntity<ConversationBranchResponse> branchConversation(
+            @PathVariable UUID conversationId,
+            @RequestBody BranchConversationRequest request
+    ) {
+        long userId = repository.ensureDevelopmentUser();
+        UUID branchId = repository.branchConversation(conversationId, request.messageId(), userId);
+        return branchId == null
+                ? ResponseEntity.notFound().build()
+                : ResponseEntity.ok(new ConversationBranchResponse(branchId));
+    }
+
+    /** Lists reusable system and user-owned prompt templates. */
+    @GetMapping("/prompt-templates")
+    public List<PromptTemplate> promptTemplates() {
+        return repository.listPromptTemplates(repository.ensureDevelopmentUser());
+    }
+
+    private record ConversationBranchResponse(UUID conversationId) {
     }
 }

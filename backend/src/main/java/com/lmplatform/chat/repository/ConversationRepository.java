@@ -2,9 +2,11 @@ package com.lmplatform.chat.repository;
 
 import com.lmplatform.chat.model.ConversationMessage;
 import com.lmplatform.chat.model.ConversationSummary;
+import com.lmplatform.chat.model.PromptTemplate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -78,18 +80,113 @@ public class ConversationRepository {
     }
 
     /** Loads only completed, non-empty messages that are safe to send back to a model. */
-    public List<Map<String, String>> modelMessages(UUID conversationId) {
+    public List<Map<String, String>> modelMessages(UUID conversationId, int limit) {
         return jdbc.query("""
-                SELECT role, content
-                FROM conversation_message
-                WHERE conversation_id = ?
-                  AND status = 'completed'
-                  AND content <> ''
-                ORDER BY sequence_no
+                SELECT role, content FROM (
+                    SELECT role, content, sequence_no
+                    FROM conversation_message
+                    WHERE conversation_id = ? AND status = 'completed'
+                      AND superseded_at IS NULL AND content <> ''
+                    ORDER BY sequence_no DESC LIMIT ?
+                ) recent_messages ORDER BY sequence_no
                 """, (rs, rowNum) -> Map.of(
                 "role", rs.getString("role"),
                 "content", rs.getString("content")
-        ), conversationId);
+        ), conversationId, limit);
+    }
+
+    /** Preserves the legacy unbounded call for title generation and focused unit tests. */
+    public List<Map<String, String>> modelMessages(UUID conversationId) {
+        return modelMessages(conversationId, 100);
+    }
+
+    /** Edits an owned user message and supersedes later messages instead of deleting audit history. */
+    @Transactional
+    public boolean editUserMessage(UUID conversationId, UUID messageId, long userId, String content) {
+        Integer sequence = jdbc.query("""
+                SELECT cm.sequence_no FROM conversation_message cm
+                JOIN conversation c ON c.id = cm.conversation_id
+                WHERE cm.id = ? AND cm.conversation_id = ? AND cm.role = 'user'
+                  AND cm.superseded_at IS NULL AND c.user_id = ? AND c.deleted_at IS NULL
+                """, (rs, rowNum) -> rs.getInt("sequence_no"), messageId, conversationId, userId)
+                .stream().findFirst().orElse(null);
+        if (sequence == null) {
+            return false;
+        }
+        jdbc.update("""
+                UPDATE conversation_message SET content = ?, edited_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                """, content.strip(), messageId);
+        jdbc.update("""
+                UPDATE conversation_message SET superseded_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE conversation_id = ? AND sequence_no > ? AND superseded_at IS NULL
+                """, conversationId, sequence);
+        jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
+        return true;
+    }
+
+    /** Copies active history through one message into a separately addressable conversation branch. */
+    @Transactional
+    public UUID branchConversation(UUID conversationId, UUID messageId, long userId) {
+        Integer sequence = jdbc.query("""
+                SELECT cm.sequence_no FROM conversation_message cm
+                JOIN conversation c ON c.id = cm.conversation_id
+                WHERE cm.id = ? AND cm.conversation_id = ? AND cm.superseded_at IS NULL
+                  AND c.user_id = ? AND c.deleted_at IS NULL
+                """, (rs, rowNum) -> rs.getInt("sequence_no"), messageId, conversationId, userId)
+                .stream().findFirst().orElse(null);
+        if (sequence == null) {
+            return null;
+        }
+        UUID branchId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO conversation (
+                    id, user_id, team_id, model_key, title, title_source, title_updated_at,
+                    parent_conversation_id, branch_from_message_id
+                ) SELECT ?, user_id, team_id, model_key, title || '（分支）', 'manual',
+                         CURRENT_TIMESTAMP, id, ? FROM conversation WHERE id = ?
+                """, branchId, messageId, conversationId);
+        jdbc.update("""
+                INSERT INTO conversation_message (
+                    id, conversation_id, sequence_no, role, content, status,
+                    input_tokens, output_tokens, error_code, created_at, updated_at
+                ) SELECT gen_random_uuid(), ?, sequence_no, role, content, status,
+                         input_tokens, output_tokens, error_code, created_at, updated_at
+                  FROM conversation_message
+                 WHERE conversation_id = ? AND sequence_no <= ? AND superseded_at IS NULL
+                 ORDER BY sequence_no
+                """, branchId, conversationId, sequence);
+        jdbc.update("""
+                UPDATE conversation SET message_count = (
+                    SELECT COUNT(*) FROM conversation_message WHERE conversation_id = ?
+                ) WHERE id = ?
+                """, branchId, branchId);
+        return branchId;
+    }
+
+    /** Lists enabled system templates and personal templates owned by the current user. */
+    public List<PromptTemplate> listPromptTemplates(long userId) {
+        return jdbc.query("""
+                SELECT id, name, description, system_prompt, scope FROM prompt_template
+                WHERE enabled = TRUE AND (scope = 'system' OR owner_user_id = ?)
+                ORDER BY scope, name
+                """, (rs, rowNum) -> new PromptTemplate(
+                rs.getObject("id", UUID.class), rs.getString("name"),
+                rs.getString("description"), rs.getString("system_prompt"), rs.getString("scope")
+        ), userId);
+    }
+
+    /** Resolves an enabled system or user-owned prompt without exposing another user's template. */
+    public Optional<String> findPromptTemplate(UUID templateId, long userId) {
+        if (templateId == null) {
+            return Optional.empty();
+        }
+        return jdbc.query("""
+                SELECT system_prompt FROM prompt_template
+                WHERE id = ? AND enabled = TRUE AND (scope = 'system' OR owner_user_id = ?)
+                """, (rs, rowNum) -> rs.getString("system_prompt"), templateId, userId)
+                .stream().findFirst();
     }
 
     /** Finalizes a generated assistant message and synchronizes the conversation message count. */
@@ -245,10 +342,12 @@ public class ConversationRepository {
     /** Returns ordered persisted messages after enforcing conversation ownership. */
     public List<ConversationMessage> listMessages(UUID conversationId, long userId) {
         return jdbc.query("""
-                SELECT cm.id, cm.role, cm.content, cm.status, cm.input_tokens, cm.output_tokens, cm.created_at
+                SELECT cm.id, cm.role, cm.content, cm.status, cm.input_tokens, cm.output_tokens,
+                       cm.created_at, cm.edited_at
                 FROM conversation_message cm
                 JOIN conversation c ON c.id = cm.conversation_id
                 WHERE cm.conversation_id = ? AND c.user_id = ? AND c.deleted_at IS NULL
+                  AND cm.superseded_at IS NULL
                 ORDER BY cm.sequence_no
                 """, (rs, rowNum) -> new ConversationMessage(
                 rs.getObject("id", UUID.class),
@@ -257,7 +356,8 @@ public class ConversationRepository {
                 rs.getString("status"),
                 rs.getInt("input_tokens"),
                 rs.getInt("output_tokens"),
-                rs.getObject("created_at", OffsetDateTime.class)
+                rs.getObject("created_at", OffsetDateTime.class),
+                rs.getObject("edited_at", OffsetDateTime.class)
         ), conversationId, userId);
     }
 }

@@ -12,6 +12,7 @@ import {
   Copy,
   Database,
   FileText,
+  GitBranch,
   Library,
   Menu,
   MessageSquarePlus,
@@ -33,9 +34,11 @@ type Role = 'user' | 'assistant'
 
 /** Message rendered in the active browser conversation. */
 interface ChatMessage {
+  id?: string
   role: Role
   content: string
   error?: boolean
+  editedAt?: string | null
 }
 
 /** Model registration exposed through the Java proxy. */
@@ -59,11 +62,21 @@ interface StreamEvent {
 
 /** Persisted message returned when restoring an existing conversation. */
 interface PersistedMessage {
-  role: Role
+  id: string
+  role: Role | 'system'
   content: string
   status: string
   inputTokens: number
   outputTokens: number
+  editedAt?: string | null
+}
+
+interface PromptTemplate {
+  id: string
+  name: string
+  description: string
+  systemPrompt: string
+  scope: string
 }
 
 // Page and conversation state stays local; durable data always comes from Spring Boot.
@@ -87,6 +100,8 @@ const editingTitle = ref('')
 const historySearch = ref('')
 const historySearchOpen = ref(false)
 const historySearchInput = ref<HTMLInputElement | null>(null)
+const promptTemplates = ref<PromptTemplate[]>([])
+const selectedTemplateId = ref('')
 let abortController: AbortController | null = null
 
 // Configure GitHub-flavored Markdown once; every rendered result is sanitized below.
@@ -164,6 +179,16 @@ const loadConversations = async () => {
   }
 }
 
+/** Loads reusable system instructions without exposing templates owned by other users. */
+const loadPromptTemplates = async () => {
+  try {
+    const response = await fetch('/api/prompt-templates')
+    if (response.ok) promptTemplates.value = await response.json()
+  } catch {
+    promptTemplates.value = []
+  }
+}
+
 /** Polls briefly because title generation intentionally runs after the first chat response. */
 const scheduleTitleRefresh = () => {
   // Title generation runs asynchronously after the first answer is persisted.
@@ -180,11 +205,14 @@ const openConversation = async (conversation: ConversationSummary) => {
   conversationId.value = conversation.id
   selectedModel.value = conversation.model
   messages.value = persisted
-    .filter((message) => message.content)
+    .filter((message): message is PersistedMessage & { role: Role } =>
+      Boolean(message.content) && message.role !== 'system')
     .map((message) => ({
+      id: message.id,
       role: message.role,
       content: message.content,
       error: message.status === 'failed',
+      editedAt: message.editedAt,
     }))
   const lastAssistant = [...persisted].reverse().find((message) => message.role === 'assistant')
   usage.value = lastAssistant
@@ -224,6 +252,33 @@ const saveRename = async () => {
     body: JSON.stringify({ title }),
   })
   if (response.ok) await loadConversations()
+}
+
+/** Replaces an owned user message; the backend retains later messages as superseded audit history. */
+const editMessage = async (message: ChatMessage) => {
+  if (!conversationId.value || !message.id || message.role !== 'user') return
+  const content = window.prompt('编辑消息', message.content)?.trim()
+  if (!content || content === message.content) return
+  const response = await fetch(`/api/conversations/${conversationId.value}/messages/${message.id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }),
+  })
+  if (!response.ok) return
+  const current = conversations.value.find((item) => item.id === conversationId.value)
+  if (current) await openConversation(current)
+  await loadConversations()
+}
+
+/** Forks active history through one message and opens the independently persisted branch. */
+const branchConversation = async (message: ChatMessage) => {
+  if (!conversationId.value || !message.id) return
+  const response = await fetch(`/api/conversations/${conversationId.value}/branches`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId: message.id }),
+  })
+  if (!response.ok) return
+  const result: { conversationId: string } = await response.json()
+  await loadConversations()
+  const branch = conversations.value.find((item) => item.id === result.conversationId)
+  if (branch) await openConversation(branch)
 }
 
 /** Soft-deletes one conversation after an explicit destructive-action confirmation. */
@@ -312,6 +367,7 @@ const sendPrompt = async (preset?: string) => {
         conversationId: conversationId.value,
         model: selectedModel.value,
         content,
+        templateId: isFirstMessage && selectedTemplateId.value ? selectedTemplateId.value : null,
       }),
       signal: abortController.signal,
     })
@@ -335,6 +391,8 @@ const sendPrompt = async (preset?: string) => {
     isGenerating.value = false
     abortController = null
     await loadConversations()
+    const current = conversations.value.find((conversation) => conversation.id === conversationId.value)
+    if (current) await openConversation(current)
     if (isFirstMessage) scheduleTitleRefresh()
     await scrollToBottom()
   }
@@ -351,6 +409,7 @@ const newConversation = () => {
   prompt.value = ''
   nextTick(resizeComposer)
   usage.value = { prompt: 0, completion: 0, total: 0 }
+  selectedTemplateId.value = ''
 }
 
 /** Implements Enter-to-send while preserving Shift+Enter for multiline input. */
@@ -366,6 +425,7 @@ onMounted(() => {
   if (isWorkspace.value) {
     loadModels()
     loadConversations()
+    loadPromptTemplates()
   }
 })
 </script>
@@ -547,11 +607,14 @@ onMounted(() => {
                 <p v-else-if="message.content">{{ message.content }}</p>
                 <div v-else class="typing-indicator" aria-label="模型正在生成"><i></i><i></i><i></i></div>
               </div>
-              <div v-if="message.role === 'assistant' && message.content" class="message-actions">
-                <button class="message-action" type="button" title="复制回答" @click="copyMessage(message.content, index)">
+              <div v-if="message.content" class="message-actions">
+                <button v-if="message.role === 'assistant'" class="message-action" type="button" title="复制回答" @click="copyMessage(message.content, index)">
                   <Check v-if="copiedMessageIndex === index" :size="15" />
                   <Copy v-else :size="15" />
                 </button>
+                <button v-if="message.role === 'user' && message.id" class="message-action" type="button" title="编辑消息" @click="editMessage(message)"><Pencil :size="15" /></button>
+                <button v-if="message.id" class="message-action" type="button" title="从此处分支" @click="branchConversation(message)"><GitBranch :size="15" /></button>
+                <small v-if="message.editedAt">已编辑</small>
               </div>
             </div>
           </article>
@@ -572,6 +635,10 @@ onMounted(() => {
           ></textarea>
           <div class="composer-toolbar">
             <div class="input-tools">
+              <select v-model="selectedTemplateId" class="template-select" :disabled="messages.length > 0" title="提示词模板">
+                <option value="">默认提示词</option>
+                <option v-for="template in promptTemplates" :key="template.id" :value="template.id">{{ template.name }}</option>
+              </select>
               <button class="icon-button" title="上传文件或图片" disabled><Paperclip :size="19" /></button>
               <button class="icon-button" title="语音输入" disabled><Mic :size="19" /></button>
               <button class="knowledge-button" type="button" disabled><Library :size="16" />知识库</button>

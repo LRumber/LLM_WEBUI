@@ -11,6 +11,7 @@ public record ConversationMessage(
         String status,
         int inputTokens,
         int outputTokens,
-        OffsetDateTime createdAt
+        OffsetDateTime createdAt,
+        OffsetDateTime editedAt
 ) {
 }

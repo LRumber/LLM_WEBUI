@@ -10,10 +10,12 @@ import java.util.UUID;
  * @param conversationId existing conversation, or {@code null} to create one
  * @param model registered model key
  * @param content current user message
+ * @param templateId optional system prompt template used when creating a conversation
  */
 public record ChatStreamRequest(
         UUID conversationId,
         @NotBlank String model,
-        @NotBlank @Size(max = 100_000) String content
+        @NotBlank @Size(max = 100_000) String content,
+        UUID templateId
 ) {
 }

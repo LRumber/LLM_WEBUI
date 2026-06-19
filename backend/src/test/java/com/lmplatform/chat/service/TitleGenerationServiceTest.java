@@ -23,7 +23,7 @@ class TitleGenerationServiceTest {
         ConversationRepository repository = mock(ConversationRepository.class);
         AiServiceClient client = mock(AiServiceClient.class);
         AiServiceProperties properties = new AiServiceProperties(
-                "http://localhost:8001", 150, "deepseek-chat"
+                "http://localhost:8001", 150, "deepseek-chat", 40
         );
         TitleGenerationService service = new TitleGenerationService(repository, client, properties);
         UUID conversationId = UUID.randomUUID();

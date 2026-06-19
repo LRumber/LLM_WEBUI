@@ -41,6 +41,8 @@ platform:
     timeout-seconds: ${AI_SERVICE_TIMEOUT_SECONDS:150}
     # Keep title generation independently configurable so it can move to a small local model.
     title-model: ${AI_TITLE_MODEL:deepseek-chat}
+    # Bound history independently from model token limits; provider tokenization remains authoritative.
+    max-context-messages: ${AI_MAX_CONTEXT_MESSAGES:40}
 
 # Expose only the operational endpoints required by local monitoring.
 management:

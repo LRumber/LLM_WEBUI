@@ -211,13 +211,74 @@ public class ConversationRepository {
     /** Lists enabled system templates and personal templates owned by the current user. */
     public List<PromptTemplate> listPromptTemplates(long userId) {
         return jdbc.query("""
-                SELECT id, name, description, system_prompt, scope FROM prompt_template
+                SELECT id, name, description, system_prompt, scope, enabled FROM prompt_template
                 WHERE enabled = TRUE AND (scope = 'system' OR owner_user_id = ?)
                 ORDER BY scope, name
                 """, (rs, rowNum) -> new PromptTemplate(
                 rs.getObject("id", UUID.class), rs.getString("name"),
-                rs.getString("description"), rs.getString("system_prompt"), rs.getString("scope")
+                rs.getString("description"), rs.getString("system_prompt"), rs.getString("scope"),
+                rs.getBoolean("enabled")
         ), userId);
+    }
+
+    /** Lists all system templates for administrators, including disabled records. */
+    public List<PromptTemplate> listSystemPromptTemplates() {
+        return jdbc.query("""
+                SELECT id, name, description, system_prompt, scope, enabled FROM prompt_template
+                WHERE scope = 'system' ORDER BY name
+                """, (rs, rowNum) -> new PromptTemplate(
+                rs.getObject("id", UUID.class), rs.getString("name"),
+                rs.getString("description"), rs.getString("system_prompt"), rs.getString("scope"),
+                rs.getBoolean("enabled")
+        ));
+    }
+
+    /** Creates either an owner-bound personal template or a platform-owned system template. */
+    public PromptTemplate createPromptTemplate(
+            Long ownerUserId,
+            String scope,
+            String name,
+            String description,
+            String systemPrompt,
+            boolean enabled
+    ) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO prompt_template (
+                    id, name, description, system_prompt, owner_user_id, scope, enabled
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, id, name.strip(), description, systemPrompt.strip(), ownerUserId, scope, enabled);
+        return new PromptTemplate(id, name.strip(), description, systemPrompt.strip(), scope, enabled);
+    }
+
+    /** Updates only a personal template owned by the requesting user. */
+    public boolean updatePersonalPromptTemplate(
+            UUID id, long userId, String name, String description, String systemPrompt, boolean enabled
+    ) {
+        return jdbc.update("""
+                UPDATE prompt_template SET name = ?, description = ?, system_prompt = ?, enabled = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND owner_user_id = ? AND scope = 'personal'
+                """, name.strip(), description, systemPrompt.strip(), enabled, id, userId) > 0;
+    }
+
+    /** Disables a personal template while preserving references from historical conversations. */
+    public boolean disablePersonalPromptTemplate(UUID id, long userId) {
+        return jdbc.update("""
+                UPDATE prompt_template SET enabled = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND owner_user_id = ? AND scope = 'personal'
+                """, id, userId) > 0;
+    }
+
+    /** Updates a platform-owned system template after administration authentication. */
+    public boolean updateSystemPromptTemplate(
+            UUID id, String name, String description, String systemPrompt, boolean enabled
+    ) {
+        return jdbc.update("""
+                UPDATE prompt_template SET name = ?, description = ?, system_prompt = ?, enabled = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND scope = 'system'
+                """, name.strip(), description, systemPrompt.strip(), enabled, id) > 0;
     }
 
     /** Resolves an enabled system or user-owned prompt without exposing another user's template. */

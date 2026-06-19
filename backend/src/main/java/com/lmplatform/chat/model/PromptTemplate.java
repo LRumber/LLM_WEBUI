@@ -2,6 +2,13 @@ package com.lmplatform.chat.model;
 
 import java.util.UUID;
 
-/** User-visible prompt template available to seed a conversation system instruction. */
-public record PromptTemplate(UUID id, String name, String description, String systemPrompt, String scope) {
+/** Prompt template projection including ownership scope and administrative enablement. */
+public record PromptTemplate(
+        UUID id,
+        String name,
+        String description,
+        String systemPrompt,
+        String scope,
+        boolean enabled
+) {
 }

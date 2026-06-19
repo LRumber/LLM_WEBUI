@@ -7,6 +7,7 @@ import com.lmplatform.chat.model.ConversationMessage;
 import com.lmplatform.chat.model.ConversationSummary;
 import com.lmplatform.chat.model.EditMessageRequest;
 import com.lmplatform.chat.model.PromptTemplate;
+import com.lmplatform.chat.model.PromptTemplateRequest;
 import com.lmplatform.chat.model.RegenerateMessageRequest;
 import com.lmplatform.chat.model.RenameConversationRequest;
 import com.lmplatform.chat.repository.ConversationRepository;
@@ -127,6 +128,38 @@ public class ChatController {
     @GetMapping("/prompt-templates")
     public List<PromptTemplate> promptTemplates() {
         return repository.listPromptTemplates(repository.ensureDevelopmentUser());
+    }
+
+    /** Creates a personal template owned exclusively by the current user. */
+    @PostMapping("/prompt-templates")
+    public PromptTemplate createPromptTemplate(@Valid @RequestBody PromptTemplateRequest request) {
+        long userId = repository.ensureDevelopmentUser();
+        return repository.createPromptTemplate(
+                userId, "personal", request.name(), request.description(),
+                request.systemPrompt(), true
+        );
+    }
+
+    /** Updates only a personal template owned by the current user. */
+    @PatchMapping("/prompt-templates/{templateId}")
+    public ResponseEntity<Void> updatePromptTemplate(
+            @PathVariable UUID templateId,
+            @Valid @RequestBody PromptTemplateRequest request
+    ) {
+        long userId = repository.ensureDevelopmentUser();
+        return repository.updatePersonalPromptTemplate(
+                templateId, userId, request.name(), request.description(),
+                request.systemPrompt(), true
+        ) ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+    }
+
+    /** Disables an owned personal template without breaking historical references. */
+    @DeleteMapping("/prompt-templates/{templateId}")
+    public ResponseEntity<Void> deletePromptTemplate(@PathVariable UUID templateId) {
+        long userId = repository.ensureDevelopmentUser();
+        return repository.disablePersonalPromptTemplate(templateId, userId)
+                ? ResponseEntity.noContent().build()
+                : ResponseEntity.notFound().build();
     }
 
     /** Replaces one assistant answer while preserving its previous version for audit. */

@@ -78,6 +78,7 @@ interface PromptTemplate {
   description: string
   systemPrompt: string
   scope: string
+  enabled: boolean
 }
 
 interface UploadedFile {
@@ -110,6 +111,9 @@ const historySearchOpen = ref(false)
 const historySearchInput = ref<HTMLInputElement | null>(null)
 const promptTemplates = ref<PromptTemplate[]>([])
 const selectedTemplateId = ref('')
+const templateManagerOpen = ref(false)
+const editingTemplateId = ref<string | null>(null)
+const templateForm = ref({ name: '', description: '', systemPrompt: '' })
 const fileInput = ref<HTMLInputElement | null>(null)
 const attachments = ref<UploadedFile[]>([])
 const uploadingFile = ref(false)
@@ -197,6 +201,42 @@ const loadPromptTemplates = async () => {
     if (response.ok) promptTemplates.value = await response.json()
   } catch {
     promptTemplates.value = []
+  }
+}
+
+/** Opens the personal-template editor while system templates remain read-only. */
+const editPromptTemplate = (template?: PromptTemplate) => {
+  editingTemplateId.value = template?.id ?? null
+  templateForm.value = {
+    name: template?.name ?? '',
+    description: template?.description ?? '',
+    systemPrompt: template?.systemPrompt ?? '',
+  }
+}
+
+/** Creates or updates a personal template through ownership-filtered APIs. */
+const savePromptTemplate = async () => {
+  const payload = { ...templateForm.value, enabled: true }
+  const response = await fetch(
+    editingTemplateId.value ? `/api/prompt-templates/${editingTemplateId.value}` : '/api/prompt-templates',
+    {
+      method: editingTemplateId.value ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  )
+  if (!response.ok) return
+  await loadPromptTemplates()
+  editPromptTemplate()
+}
+
+/** Disables an owned personal template after confirmation, preserving historical references. */
+const deletePromptTemplate = async (template: PromptTemplate) => {
+  if (!window.confirm(`确定删除个人模板“${template.name}”吗？`)) return
+  const response = await fetch(`/api/prompt-templates/${template.id}`, { method: 'DELETE' })
+  if (response.ok) {
+    if (selectedTemplateId.value === template.id) selectedTemplateId.value = ''
+    await loadPromptTemplates()
   }
 }
 
@@ -704,6 +744,7 @@ onMounted(() => {
                 <option value="">默认提示词</option>
                 <option v-for="template in promptTemplates" :key="template.id" :value="template.id">{{ template.name }}</option>
               </select>
+              <button class="icon-button" type="button" title="管理个人提示词模板" @click="templateManagerOpen = true"><Settings :size="17" /></button>
               <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
               <button class="icon-button" type="button" title="上传文件或图片" :disabled="uploadingFile" @click="fileInput?.click()"><Paperclip :size="19" /></button>
               <button class="icon-button" title="语音输入" disabled><Mic :size="19" /></button>
@@ -715,6 +756,29 @@ onMounted(() => {
         </div>
         <p class="composer-note">内容由 AI 生成，请核实重要信息</p>
       </footer>
+
+      <div v-if="templateManagerOpen" class="template-manager-backdrop" @click.self="templateManagerOpen = false">
+        <section class="template-manager">
+          <header><div><h2>提示词模板</h2><p>系统模板只读；个人模板仅你自己可见和修改。</p></div><button type="button" @click="templateManagerOpen = false">×</button></header>
+          <div class="template-manager-body">
+            <div class="template-catalog">
+              <button type="button" class="new-template" @click="editPromptTemplate()">＋ 新建个人模板</button>
+              <article v-for="template in promptTemplates" :key="template.id">
+                <div><strong>{{ template.name }}</strong><span>{{ template.scope === 'system' ? '系统' : '个人' }}</span></div>
+                <p>{{ template.description || '暂无说明' }}</p>
+                <div v-if="template.scope === 'personal'"><button type="button" @click="editPromptTemplate(template)">编辑</button><button type="button" @click="deletePromptTemplate(template)">删除</button></div>
+              </article>
+            </div>
+            <form class="template-form" @submit.prevent="savePromptTemplate">
+              <h3>{{ editingTemplateId ? '编辑个人模板' : '新建个人模板' }}</h3>
+              <label>名称<input v-model="templateForm.name" maxlength="128" required /></label>
+              <label>说明<input v-model="templateForm.description" maxlength="512" /></label>
+              <label>系统提示词<textarea v-model="templateForm.systemPrompt" rows="10" maxlength="100000" required></textarea></label>
+              <button type="submit">保存模板</button>
+            </form>
+          </div>
+        </section>
+      </div>
     </section>
   </main>
 </template>

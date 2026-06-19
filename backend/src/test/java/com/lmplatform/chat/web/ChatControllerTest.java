@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 import com.lmplatform.chat.client.AiServiceClient;
 import com.lmplatform.chat.model.BranchConversationRequest;
 import com.lmplatform.chat.model.EditMessageRequest;
+import com.lmplatform.chat.model.PromptTemplateRequest;
 import com.lmplatform.chat.repository.ConversationRepository;
 import com.lmplatform.chat.service.ChatService;
 import java.util.UUID;
@@ -76,5 +77,22 @@ class ChatControllerTest {
         assertThat(controller.branchConversation(
                 conversationId, new BranchConversationRequest(messageId)
         ).getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void updatesOnlyOwnedPersonalTemplate() {
+        ConversationRepository repository = mock(ConversationRepository.class);
+        ChatController controller = new ChatController(
+                mock(ChatService.class), repository, mock(AiServiceClient.class)
+        );
+        UUID templateId = UUID.randomUUID();
+        when(repository.ensureDevelopmentUser()).thenReturn(7L);
+        when(repository.updatePersonalPromptTemplate(
+                templateId, 7L, "我的模板", "说明", "系统提示", true
+        )).thenReturn(true);
+
+        assertThat(controller.updatePromptTemplate(
+                templateId, new PromptTemplateRequest("我的模板", "说明", "系统提示", true)
+        ).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
     }
 }

@@ -66,6 +66,15 @@ interface ModelRegistration {
   api_key_env?: string
 }
 
+interface PromptTemplate {
+  id: string
+  name: string
+  description: string
+  systemPrompt: string
+  scope: string
+  enabled: boolean
+}
+
 const overview = ref<AdminOverview>({
   userCount: 0,
   conversationCount: 0,
@@ -75,6 +84,7 @@ const overview = ref<AdminOverview>({
 const dailyUsage = ref<DailyUsage[]>([])
 const users = ref<AdminUser[]>([])
 const models = ref<ModelRegistration[]>([])
+const systemTemplates = ref<PromptTemplate[]>([])
 const loading = ref(true)
 const loadError = ref(false)
 const sessionChecked = ref(false)
@@ -91,6 +101,7 @@ const modelForm = ref<ModelRegistration>({
   capabilities: ['chat'], enabled: true, context_window: 32768, quantization: '',
   tensor_parallel_size: 1, gpu_ids: [], gpu_memory_utilization: 0.9, max_concurrency: 4,
 })
+const templateForm = ref({ id: '', name: '', description: '', systemPrompt: '', enabled: true })
 
 const maxDailyTokens = computed(() => {
   return Math.max(...dailyUsage.value.map((day) => day.inputTokens + day.outputTokens), 1)
@@ -145,12 +156,18 @@ const loadModels = async () => {
   }
 }
 
+/** Loads system prompt templates, including disabled records visible only to administrators. */
+const loadSystemTemplates = async () => {
+  const response = await fetch('/api/admin/prompt-templates')
+  systemTemplates.value = response.ok ? await response.json() : []
+}
+
 const checkSession = async () => {
   try {
     const response = await fetch('/api/admin/auth/me')
     if (response.ok) {
       currentAdmin.value = await response.json()
-      await Promise.all([loadDashboard(), loadModels()])
+      await Promise.all([loadDashboard(), loadModels(), loadSystemTemplates()])
     }
   } finally {
     sessionChecked.value = true
@@ -172,7 +189,7 @@ const login = async () => {
     }
     currentAdmin.value = await response.json()
     loginPassword.value = ''
-    await Promise.all([loadDashboard(), loadModels()])
+    await Promise.all([loadDashboard(), loadModels(), loadSystemTemplates()])
   } catch {
     loginError.value = '无法连接管理服务'
   } finally {
@@ -262,6 +279,26 @@ const checkModel = async (model: ModelRegistration) => {
   }
 }
 
+/** Loads one system template into the administrator editor or clears it for creation. */
+const editSystemTemplate = (template?: PromptTemplate) => {
+  templateForm.value = template
+    ? { id: template.id, name: template.name, description: template.description, systemPrompt: template.systemPrompt, enabled: template.enabled }
+    : { id: '', name: '', description: '', systemPrompt: '', enabled: true }
+}
+
+/** Creates or updates platform-owned templates without exposing this capability to normal users. */
+const saveSystemTemplate = async () => {
+  const id = templateForm.value.id
+  const response = await fetch(id ? `/api/admin/prompt-templates/${id}` : '/api/admin/prompt-templates', {
+    method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(templateForm.value),
+  })
+  if (response.ok) {
+    editSystemTemplate()
+    await loadSystemTemplates()
+  }
+}
+
 onMounted(checkSession)
 </script>
 
@@ -334,6 +371,22 @@ onMounted(checkSession)
             <div class="model-card-actions"><button type="button" @click="checkModel(model)">{{ modelHealth[model.key] || '健康检查' }}</button><button type="button" @click="editModel(model)">编辑</button><button class="danger" type="button" @click="deleteModel(model)">移除</button></div>
           </article>
           <p v-if="!models.length" class="model-empty">AI 服务尚无模型注册或当前不可用。</p>
+        </div>
+      </section>
+
+      <section class="admin-panel prompt-admin-panel">
+        <div class="panel-heading"><div><h2>系统提示词模板</h2><p>所有用户可选择，只有后台管理员可以修改</p></div><button class="panel-action" type="button" @click="editSystemTemplate()">新增模板</button></div>
+        <div class="prompt-admin-layout">
+          <div class="prompt-admin-list">
+            <article v-for="template in systemTemplates" :key="template.id" @click="editSystemTemplate(template)"><div><strong>{{ template.name }}</strong><span :class="{ off: !template.enabled }">{{ template.enabled ? '启用' : '停用' }}</span></div><p>{{ template.description || '暂无说明' }}</p></article>
+          </div>
+          <form class="prompt-admin-form" @submit.prevent="saveSystemTemplate">
+            <label>名称<input v-model="templateForm.name" maxlength="128" required /></label>
+            <label>说明<input v-model="templateForm.description" maxlength="512" /></label>
+            <label>系统提示词<textarea v-model="templateForm.systemPrompt" rows="6" maxlength="100000" required></textarea></label>
+            <label class="prompt-enabled"><input v-model="templateForm.enabled" type="checkbox" />启用模板</label>
+            <button type="submit">{{ templateForm.id ? '保存修改' : '创建模板' }}</button>
+          </form>
         </div>
       </section>
 
@@ -425,9 +478,10 @@ onMounted(checkSession)
 .panel-action { height: 32px; padding: 0 11px; color: #fff; background: #1f765c; border: 0; border-radius: 6px; font-size: 11px; }.panel-action:hover { background: #185f4a; }
 .model-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 17px; }.model-card { min-width: 0; padding: 15px; border: 1px solid #e4e7e5; border-radius: 9px; }.model-card-heading { display: flex; align-items: center; gap: 9px; }.model-card-heading > span { width: 32px; height: 32px; display: grid; place-items: center; color: #23765d; background: #e9f4f0; border-radius: 7px; }.model-card-heading strong, .model-card-heading small { display: block; }.model-card-heading strong { font-size: 12px; }.model-card-heading small { margin-top: 3px; color: #929895; font-size: 9px; }.model-card-heading i { margin-left: auto; padding: 3px 6px; color: #8a5951; background: #f8ecea; border-radius: 8px; font-size: 9px; font-style: normal; }.model-card-heading i.enabled { color: #187056; background: #e8f4ef; }.model-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0 10px; }.model-card dl div { display: flex; justify-content: space-between; gap: 6px; }.model-card dt { color: #969c99; font-size: 9px; }.model-card dd { margin: 0; color: #4e5753; font-size: 10px; }.model-card > p { overflow: hidden; margin: 0; color: #8a918e; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.model-card-actions { display: flex; gap: 5px; margin-top: 13px; }.model-card-actions button { height: 27px; padding: 0 8px; color: #5f6864; background: #f5f7f6; border: 1px solid #e1e5e3; border-radius: 5px; font-size: 9px; }.model-card-actions button:hover { background: #ebefed; }.model-card-actions button.danger:hover { color: #9a3f35; background: #faeeec; }.model-empty { grid-column: 1 / -1; padding: 25px; color: #939a97; text-align: center; font-size: 11px; }
 .model-editor-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(20, 28, 25, .45); }.model-editor { width: min(100%, 680px); max-height: calc(100vh - 40px); overflow-y: auto; padding: 22px; background: #fff; border-radius: 11px; box-shadow: 0 20px 60px rgba(0,0,0,.2); }.editor-close { width: 30px; height: 30px; color: #737b78; background: transparent; border: 0; border-radius: 6px; font-size: 21px; }.editor-close:hover { background: #f0f2f1; }.model-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 20px; }.model-form-grid label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.model-form-grid label.wide { grid-column: 1 / -1; }.model-form-grid input:not([type=checkbox]), .model-form-grid select { width: 100%; height: 36px; padding: 0 9px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; }.model-form-grid input:focus, .model-form-grid select:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.model-form-grid .model-enabled { display: flex; grid-column: 1 / -1; align-items: center; gap: 8px; }.editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 21px; }.editor-actions button { height: 34px; padding: 0 13px; color: #606966; background: #f4f6f5; border: 1px solid #dde1df; border-radius: 6px; }.editor-actions button.primary { color: #fff; background: #1e745a; border-color: #1e745a; }
+.prompt-admin-layout { display: grid; grid-template-columns: .8fr 1.2fr; gap: 16px; margin-top: 17px; }.prompt-admin-list { max-height: 290px; overflow-y: auto; }.prompt-admin-list article { padding: 11px; border: 1px solid #e3e6e4; border-radius: 7px; cursor: pointer; }.prompt-admin-list article + article { margin-top: 7px; }.prompt-admin-list article:hover { background: #f7f9f8; }.prompt-admin-list article > div { display: flex; justify-content: space-between; }.prompt-admin-list strong { font-size: 11px; }.prompt-admin-list span { color: #187056; font-size: 9px; }.prompt-admin-list span.off { color: #9a5148; }.prompt-admin-list p { margin: 6px 0 0; color: #8b928f; font-size: 9px; }.prompt-admin-form { display: grid; gap: 10px; }.prompt-admin-form label { display: grid; gap: 5px; color: #5d6662; font-size: 10px; font-weight: 600; }.prompt-admin-form input:not([type=checkbox]), .prompt-admin-form textarea { padding: 8px 9px; border: 1px solid #d8dcda; border-radius: 6px; outline: 0; resize: vertical; }.prompt-admin-form .prompt-enabled { display: flex; align-items: center; gap: 6px; }.prompt-admin-form > button { height: 34px; color: #fff; background: #1e745a; border: 0; border-radius: 6px; }
 .usage-chart { min-height: 190px; display: flex; align-items: flex-end; gap: 14px; padding: 25px 8px 0; opacity: 1; transition: opacity .15s; }.usage-chart.loading { opacity: .45; }.usage-column { min-width: 0; height: 165px; display: flex; flex: 1; flex-direction: column; align-items: center; }.bar-area { width: min(44px, 70%); height: 112px; display: flex; align-items: flex-end; }.usage-bar { width: 100%; min-height: 4px; background: linear-gradient(180deg, #42a887, #197559); border-radius: 5px 5px 2px 2px; }.usage-column strong { margin-top: 8px; color: #59615e; font-size: 10px; }.usage-column span { margin-top: 5px; color: #949a98; font-size: 10px; }.empty-chart { width: 100%; align-self: center; color: #9aa09e; text-align: center; font-size: 12px; }
 .table-wrap { margin-top: 16px; overflow-x: auto; }table { width: 100%; border-collapse: collapse; font-size: 12px; }th { padding: 10px 12px; color: #8a918e; background: #f7f8f8; font-size: 10px; font-weight: 600; text-align: left; }td { padding: 12px; color: #59615e; border-bottom: 1px solid #eef0ef; }.table-user { display: flex; align-items: center; gap: 9px; }.table-user > span { width: 27px; height: 27px; display: grid; place-items: center; color: #fff; background: #527a6d; border-radius: 50%; font-size: 10px; }.table-user strong { color: #303633; font-size: 12px; }.status-pill { padding: 3px 7px; color: #197357; background: #e9f5f0; border-radius: 10px; font-size: 10px; }.status-pill.inactive { color: #8b4941; background: #f8eae8; }.empty-table { padding: 28px; color: #969c99; text-align: center; }
 .admin-toggle { display: flex; align-items: center; gap: 6px; padding: 0; color: #7d8582; background: transparent; border: 0; font-size: 10px; }.admin-toggle > span { position: relative; width: 26px; height: 15px; background: #cdd2d0; border-radius: 8px; transition: background .15s; }.admin-toggle > span::after { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; content: ''; background: #fff; border-radius: 50%; transition: transform .15s; }.admin-toggle.enabled { color: #176f55; }.admin-toggle.enabled > span { background: #27856a; }.admin-toggle.enabled > span::after { transform: translateX(11px); }
 @media (max-width: 900px) { .admin-sidebar { width: 188px; flex-basis: 188px; }.admin-brand img { width: 62px; }.metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.model-grid { grid-template-columns: 1fr 1fr; }.admin-content { padding: 24px 20px 36px; } }
-@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-grid, .model-form-grid { grid-template-columns: 1fr; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
+@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-grid, .model-form-grid, .prompt-admin-layout { grid-template-columns: 1fr; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
 </style>

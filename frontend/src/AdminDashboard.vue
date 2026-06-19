@@ -48,6 +48,24 @@ interface AdminPrincipal {
   source: 'local' | 'oauth2'
 }
 
+interface ModelRegistration {
+  key: string
+  display_name: string
+  provider: string
+  engine: 'vllm' | 'sglang' | 'ollama' | 'llama.cpp' | 'openai-compatible'
+  base_url: string
+  model_name: string
+  capabilities: string[]
+  enabled: boolean
+  context_window?: number
+  quantization?: string
+  tensor_parallel_size: number
+  gpu_ids: number[]
+  gpu_memory_utilization: number
+  max_concurrency: number
+  api_key_env?: string
+}
+
 const overview = ref<AdminOverview>({
   userCount: 0,
   conversationCount: 0,
@@ -56,6 +74,7 @@ const overview = ref<AdminOverview>({
 })
 const dailyUsage = ref<DailyUsage[]>([])
 const users = ref<AdminUser[]>([])
+const models = ref<ModelRegistration[]>([])
 const loading = ref(true)
 const loadError = ref(false)
 const sessionChecked = ref(false)
@@ -64,6 +83,14 @@ const loginUsername = ref('')
 const loginPassword = ref('')
 const loginError = ref('')
 const loginSubmitting = ref(false)
+const modelEditorOpen = ref(false)
+const modelSaving = ref(false)
+const modelHealth = ref<Record<string, string>>({})
+const modelForm = ref<ModelRegistration>({
+  key: '', display_name: '', provider: 'local', engine: 'vllm', base_url: '', model_name: '',
+  capabilities: ['chat'], enabled: true, context_window: 32768, quantization: '',
+  tensor_parallel_size: 1, gpu_ids: [], gpu_memory_utilization: 0.9, max_concurrency: 4,
+})
 
 const maxDailyTokens = computed(() => {
   return Math.max(...dailyUsage.value.map((day) => day.inputTokens + day.outputTokens), 1)
@@ -104,12 +131,26 @@ const loadDashboard = async () => {
   }
 }
 
+/** Loads administrative model registrations without making dashboard metrics depend on AI uptime. */
+const loadModels = async () => {
+  try {
+    const response = await fetch('/api/admin/models')
+    if (response.status === 401) {
+      currentAdmin.value = null
+      return
+    }
+    models.value = response.ok ? await response.json() : []
+  } catch {
+    models.value = []
+  }
+}
+
 const checkSession = async () => {
   try {
     const response = await fetch('/api/admin/auth/me')
     if (response.ok) {
       currentAdmin.value = await response.json()
-      await loadDashboard()
+      await Promise.all([loadDashboard(), loadModels()])
     }
   } finally {
     sessionChecked.value = true
@@ -131,7 +172,7 @@ const login = async () => {
     }
     currentAdmin.value = await response.json()
     loginPassword.value = ''
-    await loadDashboard()
+    await Promise.all([loadDashboard(), loadModels()])
   } catch {
     loginError.value = '无法连接管理服务'
   } finally {
@@ -153,6 +194,72 @@ const setAdministrator = async (user: AdminUser) => {
     body: JSON.stringify({ enabled }),
   })
   if (response.ok) user.administrator = enabled
+}
+
+/** Opens a clean registration editor for an OpenAI-compatible inference endpoint. */
+const createModel = () => {
+  modelForm.value = {
+    key: '', display_name: '', provider: 'local', engine: 'vllm', base_url: '', model_name: '',
+    capabilities: ['chat'], enabled: true, context_window: 32768, quantization: '',
+    tensor_parallel_size: 1, gpu_ids: [], gpu_memory_utilization: 0.9, max_concurrency: 4,
+  }
+  modelEditorOpen.value = true
+}
+
+/** Copies an existing registration so edits remain cancelable until explicitly saved. */
+const editModel = (model: ModelRegistration) => {
+  modelForm.value = JSON.parse(JSON.stringify(model))
+  modelEditorOpen.value = true
+}
+
+const gpuIdsText = computed({
+  get: () => modelForm.value.gpu_ids.join(','),
+  set: (value: string) => {
+    modelForm.value.gpu_ids = value.split(',').map((item) => Number(item.trim()))
+      .filter((item) => Number.isInteger(item) && item >= 0)
+  },
+})
+
+const capabilitiesText = computed({
+  get: () => modelForm.value.capabilities.join(','),
+  set: (value: string) => {
+    modelForm.value.capabilities = value.split(',').map((item) => item.trim()).filter(Boolean)
+  },
+})
+
+/** Persists engine, quantization, GPU placement, capability, and concurrency settings atomically. */
+const saveModel = async () => {
+  modelSaving.value = true
+  try {
+    const response = await fetch(`/api/admin/models/${encodeURIComponent(modelForm.value.key)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modelForm.value),
+    })
+    if (response.ok) {
+      modelEditorOpen.value = false
+      await loadModels()
+    }
+  } finally {
+    modelSaving.value = false
+  }
+}
+
+/** Removes only platform registration metadata after explicit confirmation. */
+const deleteModel = async (model: ModelRegistration) => {
+  if (!window.confirm(`确定移除模型注册“${model.display_name}”吗？模型文件不会被删除。`)) return
+  const response = await fetch(`/api/admin/models/${encodeURIComponent(model.key)}`, { method: 'DELETE' })
+  if (response.ok) await loadModels()
+}
+
+/** Executes a bounded readiness probe and keeps the latest result beside its model. */
+const checkModel = async (model: ModelRegistration) => {
+  modelHealth.value[model.key] = '检查中'
+  try {
+    const response = await fetch(`/api/admin/models/${encodeURIComponent(model.key)}/health`, { method: 'POST' })
+    const result = response.ok ? await response.json() : null
+    modelHealth.value[model.key] = result ? `${result.status} · ${result.latency_ms}ms` : '不可用'
+  } catch {
+    modelHealth.value[model.key] = '不可用'
+  }
 }
 
 onMounted(checkSession)
@@ -187,7 +294,7 @@ onMounted(checkSession)
         <a class="active" href="/admin"><LayoutDashboard :size="18" />概览</a>
         <a href="#users"><Users :size="18" />用户管理</a>
         <a href="#usage"><Activity :size="18" />用量统计</a>
-        <span class="disabled"><Bot :size="18" />模型管理<small>待建设</small></span>
+        <a href="#models"><Bot :size="18" />模型管理</a>
         <span class="disabled"><Settings :size="18" />系统设置<small>待建设</small></span>
       </nav>
       <div class="admin-sidebar-footer">
@@ -212,6 +319,46 @@ onMounted(checkSession)
         <article><span class="metric-icon blue"><MessageSquare :size="20" /></span><div><small>有效会话</small><strong>{{ formatNumber(overview.conversationCount) }}</strong></div></article>
         <article><span class="metric-icon orange"><Zap :size="20" /></span><div><small>今日请求</small><strong>{{ formatNumber(overview.todayRequestCount) }}</strong></div></article>
         <article><span class="metric-icon purple"><Activity :size="20" /></span><div><small>今日 Token</small><strong>{{ formatNumber(overview.todayTokenCount) }}</strong></div></article>
+      </div>
+
+      <section id="models" class="admin-panel model-panel">
+        <div class="panel-heading">
+          <div><h2>模型管理</h2><p>动态注册 OpenAI 兼容端点、推理引擎与 GPU 并发参数</p></div>
+          <button class="panel-action" type="button" @click="createModel">新增模型</button>
+        </div>
+        <div class="model-grid">
+          <article v-for="model in models" :key="model.key" class="model-card">
+            <div class="model-card-heading"><span><Bot :size="18" /></span><div><strong>{{ model.display_name }}</strong><small>{{ model.key }}</small></div><i :class="{ enabled: model.enabled }">{{ model.enabled ? '启用' : '停用' }}</i></div>
+            <dl><div><dt>引擎</dt><dd>{{ model.engine }}</dd></div><div><dt>量化</dt><dd>{{ model.quantization || '无' }}</dd></div><div><dt>GPU</dt><dd>{{ model.gpu_ids.length ? model.gpu_ids.join(', ') : '自动' }}</dd></div><div><dt>并发</dt><dd>{{ model.max_concurrency }}</dd></div></dl>
+            <p>{{ model.base_url }}</p>
+            <div class="model-card-actions"><button type="button" @click="checkModel(model)">{{ modelHealth[model.key] || '健康检查' }}</button><button type="button" @click="editModel(model)">编辑</button><button class="danger" type="button" @click="deleteModel(model)">移除</button></div>
+          </article>
+          <p v-if="!models.length" class="model-empty">AI 服务尚无模型注册或当前不可用。</p>
+        </div>
+      </section>
+
+      <div v-if="modelEditorOpen" class="model-editor-backdrop" @click.self="modelEditorOpen = false">
+        <form class="model-editor" @submit.prevent="saveModel">
+          <div class="panel-heading"><div><h2>{{ models.some((item) => item.key === modelForm.key) ? '编辑模型' : '新增模型' }}</h2><p>所有推理引擎必须提供 OpenAI 兼容端点</p></div><button class="editor-close" type="button" @click="modelEditorOpen = false">×</button></div>
+          <div class="model-form-grid">
+            <label>模型标识<input v-model="modelForm.key" pattern="[a-z0-9][a-z0-9._-]+" required /></label>
+            <label>显示名称<input v-model="modelForm.display_name" required /></label>
+            <label>推理引擎<select v-model="modelForm.engine"><option>vllm</option><option>sglang</option><option>ollama</option><option>llama.cpp</option><option>openai-compatible</option></select></label>
+            <label>Provider<input v-model="modelForm.provider" required /></label>
+            <label class="wide">API 地址<input v-model="modelForm.base_url" type="url" placeholder="http://127.0.0.1:8000/v1" required /></label>
+            <label class="wide">模型名称/路径<input v-model="modelForm.model_name" required /></label>
+            <label>量化版本<input v-model="modelForm.quantization" placeholder="AWQ / GPTQ / Q4_K_M" /></label>
+            <label>上下文窗口<input v-model.number="modelForm.context_window" type="number" min="1" /></label>
+            <label>GPU 编号<input v-model="gpuIdsText" placeholder="0,1" /></label>
+            <label>张量并行<input v-model.number="modelForm.tensor_parallel_size" type="number" min="1" max="64" /></label>
+            <label>显存利用率<input v-model.number="modelForm.gpu_memory_utilization" type="number" min="0.01" max="1" step="0.01" /></label>
+            <label>最大并发<input v-model.number="modelForm.max_concurrency" type="number" min="1" max="1024" /></label>
+            <label class="wide">能力（逗号分隔）<input v-model="capabilitiesText" placeholder="chat,vision" required /></label>
+            <label class="wide">密钥环境变量<input v-model="modelForm.api_key_env" placeholder="留空表示本地无密钥端点" /></label>
+            <label class="model-enabled"><input v-model="modelForm.enabled" type="checkbox" />允许用户选择该模型</label>
+          </div>
+          <div class="editor-actions"><button type="button" @click="modelEditorOpen = false">取消</button><button class="primary" type="submit" :disabled="modelSaving">{{ modelSaving ? '保存中…' : '保存模型' }}</button></div>
+        </form>
       </div>
 
       <section id="usage" class="admin-panel usage-panel">
@@ -275,9 +422,12 @@ onMounted(checkSession)
 .metric-grid article { min-width: 0; display: flex; align-items: center; gap: 13px; padding: 18px; background: #fff; border: 1px solid #e4e7e5; border-radius: 10px; }.metric-icon { width: 41px; height: 41px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 9px; }.metric-icon.green { color: #14795d; background: #e8f4f0; }.metric-icon.blue { color: #326e9d; background: #eaf2f8; }.metric-icon.orange { color: #a66122; background: #faf0e5; }.metric-icon.purple { color: #75549a; background: #f1ebf7; }
 .metric-grid small, .metric-grid strong { display: block; }.metric-grid small { color: #818885; font-size: 11px; }.metric-grid strong { margin-top: 5px; font-size: 23px; }
 .admin-panel { margin-top: 17px; padding: 20px; background: #fff; border: 1px solid #e4e7e5; border-radius: 10px; }.panel-heading { display: flex; align-items: center; justify-content: space-between; }.panel-heading h2 { margin: 0; font-size: 15px; }.panel-heading p { margin: 5px 0 0; color: #8a918e; font-size: 11px; }.panel-heading > span { color: #7c8481; font-size: 11px; }
+.panel-action { height: 32px; padding: 0 11px; color: #fff; background: #1f765c; border: 0; border-radius: 6px; font-size: 11px; }.panel-action:hover { background: #185f4a; }
+.model-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 17px; }.model-card { min-width: 0; padding: 15px; border: 1px solid #e4e7e5; border-radius: 9px; }.model-card-heading { display: flex; align-items: center; gap: 9px; }.model-card-heading > span { width: 32px; height: 32px; display: grid; place-items: center; color: #23765d; background: #e9f4f0; border-radius: 7px; }.model-card-heading strong, .model-card-heading small { display: block; }.model-card-heading strong { font-size: 12px; }.model-card-heading small { margin-top: 3px; color: #929895; font-size: 9px; }.model-card-heading i { margin-left: auto; padding: 3px 6px; color: #8a5951; background: #f8ecea; border-radius: 8px; font-size: 9px; font-style: normal; }.model-card-heading i.enabled { color: #187056; background: #e8f4ef; }.model-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0 10px; }.model-card dl div { display: flex; justify-content: space-between; gap: 6px; }.model-card dt { color: #969c99; font-size: 9px; }.model-card dd { margin: 0; color: #4e5753; font-size: 10px; }.model-card > p { overflow: hidden; margin: 0; color: #8a918e; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.model-card-actions { display: flex; gap: 5px; margin-top: 13px; }.model-card-actions button { height: 27px; padding: 0 8px; color: #5f6864; background: #f5f7f6; border: 1px solid #e1e5e3; border-radius: 5px; font-size: 9px; }.model-card-actions button:hover { background: #ebefed; }.model-card-actions button.danger:hover { color: #9a3f35; background: #faeeec; }.model-empty { grid-column: 1 / -1; padding: 25px; color: #939a97; text-align: center; font-size: 11px; }
+.model-editor-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(20, 28, 25, .45); }.model-editor { width: min(100%, 680px); max-height: calc(100vh - 40px); overflow-y: auto; padding: 22px; background: #fff; border-radius: 11px; box-shadow: 0 20px 60px rgba(0,0,0,.2); }.editor-close { width: 30px; height: 30px; color: #737b78; background: transparent; border: 0; border-radius: 6px; font-size: 21px; }.editor-close:hover { background: #f0f2f1; }.model-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 20px; }.model-form-grid label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.model-form-grid label.wide { grid-column: 1 / -1; }.model-form-grid input:not([type=checkbox]), .model-form-grid select { width: 100%; height: 36px; padding: 0 9px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; }.model-form-grid input:focus, .model-form-grid select:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.model-form-grid .model-enabled { display: flex; grid-column: 1 / -1; align-items: center; gap: 8px; }.editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 21px; }.editor-actions button { height: 34px; padding: 0 13px; color: #606966; background: #f4f6f5; border: 1px solid #dde1df; border-radius: 6px; }.editor-actions button.primary { color: #fff; background: #1e745a; border-color: #1e745a; }
 .usage-chart { min-height: 190px; display: flex; align-items: flex-end; gap: 14px; padding: 25px 8px 0; opacity: 1; transition: opacity .15s; }.usage-chart.loading { opacity: .45; }.usage-column { min-width: 0; height: 165px; display: flex; flex: 1; flex-direction: column; align-items: center; }.bar-area { width: min(44px, 70%); height: 112px; display: flex; align-items: flex-end; }.usage-bar { width: 100%; min-height: 4px; background: linear-gradient(180deg, #42a887, #197559); border-radius: 5px 5px 2px 2px; }.usage-column strong { margin-top: 8px; color: #59615e; font-size: 10px; }.usage-column span { margin-top: 5px; color: #949a98; font-size: 10px; }.empty-chart { width: 100%; align-self: center; color: #9aa09e; text-align: center; font-size: 12px; }
 .table-wrap { margin-top: 16px; overflow-x: auto; }table { width: 100%; border-collapse: collapse; font-size: 12px; }th { padding: 10px 12px; color: #8a918e; background: #f7f8f8; font-size: 10px; font-weight: 600; text-align: left; }td { padding: 12px; color: #59615e; border-bottom: 1px solid #eef0ef; }.table-user { display: flex; align-items: center; gap: 9px; }.table-user > span { width: 27px; height: 27px; display: grid; place-items: center; color: #fff; background: #527a6d; border-radius: 50%; font-size: 10px; }.table-user strong { color: #303633; font-size: 12px; }.status-pill { padding: 3px 7px; color: #197357; background: #e9f5f0; border-radius: 10px; font-size: 10px; }.status-pill.inactive { color: #8b4941; background: #f8eae8; }.empty-table { padding: 28px; color: #969c99; text-align: center; }
 .admin-toggle { display: flex; align-items: center; gap: 6px; padding: 0; color: #7d8582; background: transparent; border: 0; font-size: 10px; }.admin-toggle > span { position: relative; width: 26px; height: 15px; background: #cdd2d0; border-radius: 8px; transition: background .15s; }.admin-toggle > span::after { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; content: ''; background: #fff; border-radius: 50%; transition: transform .15s; }.admin-toggle.enabled { color: #176f55; }.admin-toggle.enabled > span { background: #27856a; }.admin-toggle.enabled > span::after { transform: translateX(11px); }
-@media (max-width: 900px) { .admin-sidebar { width: 188px; flex-basis: 188px; }.admin-brand img { width: 62px; }.metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.admin-content { padding: 24px 20px 36px; } }
-@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid { grid-template-columns: 1fr 1fr; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
+@media (max-width: 900px) { .admin-sidebar { width: 188px; flex-basis: 188px; }.admin-brand img { width: 62px; }.metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.model-grid { grid-template-columns: 1fr 1fr; }.admin-content { padding: 24px 20px 36px; } }
+@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-grid, .model-form-grid { grid-template-columns: 1fr; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
 </style>

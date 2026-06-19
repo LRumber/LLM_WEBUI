@@ -43,6 +43,40 @@ public class AiServiceClient {
                 .body(String.class);
     }
 
+    /** Fetches enabled and disabled registrations for administration. */
+    public String listAllModels() {
+        return restClient.get()
+                .uri("/internal/models")
+                .accept(MediaType.APPLICATION_JSON)
+                .retrieve()
+                .body(String.class);
+    }
+
+    /** Creates or replaces a dynamic model registration in the AI gateway. */
+    public String upsertModel(String key, JsonNode model) {
+        return restClient.put()
+                .uri("/internal/models/{key}", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .body(model)
+                .retrieve()
+                .body(String.class);
+    }
+
+    /** Removes a gateway registration without deleting model weights. */
+    public void deleteModel(String key) {
+        restClient.delete().uri("/internal/models/{key}", key).retrieve().toBodilessEntity();
+    }
+
+    /** Probes one enabled inference endpoint and returns its normalized health result. */
+    public String checkModelHealth(String key) {
+        return restClient.post()
+                .uri("/internal/models/{key}/health", key)
+                .accept(MediaType.APPLICATION_JSON)
+                .retrieve()
+                .body(String.class);
+    }
+
     /**
      * Sends an OpenAI-compatible conversation and forwards each normalized SSE event as it arrives.
      * The response is consumed inside the exchange callback so the underlying connection stays open.

@@ -643,7 +643,6 @@ onMounted(() => {
       </div>
 
       <div class="sidebar-footer">
-        <a class="nav-item" href="/admin"><Settings :size="18" />管理后台</a>
         <div class="user-row">
           <div class="avatar">管</div>
           <div class="user-meta"><strong>开发用户</strong><span>本地调试模式</span></div>

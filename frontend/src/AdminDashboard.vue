@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   Activity,
-  ArrowLeft,
   Bot,
   LayoutDashboard,
   LockKeyhole,
@@ -324,7 +323,6 @@ onMounted(checkSession)
           <ShieldCheck :size="17" />{{ loginSubmitting ? '正在登录…' : '登录管理后台' }}
         </button>
       </form>
-      <a href="/app"><ArrowLeft :size="15" />返回工作台</a>
     </section>
   </main>
 
@@ -346,7 +344,6 @@ onMounted(checkSession)
         <div><strong>{{ currentAdmin.displayName }}</strong><span>本地管理员</span></div>
         <button type="button" title="退出登录" @click="logout"><LogOut :size="16" /></button>
       </div>
-      <a class="back-workspace" href="/app"><ArrowLeft :size="17" />返回工作台</a>
     </aside>
 
     <section class="admin-content">

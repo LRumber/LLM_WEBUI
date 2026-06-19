@@ -26,6 +26,11 @@ spring:
 
 # Platform-owned integrations remain environment-configurable for offline deployments.
 platform:
+  admin:
+    bootstrap:
+      username: ${ADMIN_INITIAL_USERNAME:}
+      password: ${ADMIN_INITIAL_PASSWORD:}
+      display-name: ${ADMIN_INITIAL_DISPLAY_NAME:系统管理员}
   oauth2:
     server: ${OAUTH2_SERVER:http://172.16.4.250:30801}
     client-id: ${OAUTH2_CLIENT_ID:replace-me}

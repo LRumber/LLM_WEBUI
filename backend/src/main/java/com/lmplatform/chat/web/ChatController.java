@@ -13,6 +13,7 @@ import java.util.UUID;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -79,6 +80,15 @@ public class ChatController {
     ) {
         long userId = repository.ensureDevelopmentUser();
         return repository.renameConversation(conversationId, userId, request.title())
+                ? ResponseEntity.noContent().build()
+                : ResponseEntity.notFound().build();
+    }
+
+    /** Soft-deletes an owned conversation while retaining its audit and usage history. */
+    @DeleteMapping("/conversations/{conversationId}")
+    public ResponseEntity<Void> deleteConversation(@PathVariable UUID conversationId) {
+        long userId = repository.ensureDevelopmentUser();
+        return repository.softDeleteConversation(conversationId, userId)
                 ? ResponseEntity.noContent().build()
                 : ResponseEntity.notFound().build();
     }

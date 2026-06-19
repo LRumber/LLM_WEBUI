@@ -51,6 +51,8 @@ FastAPI AI 服务
 
 平台不提供注册功能。用户由统一身份认证中心维护，本平台仅保存业务授权和统计所需的影子用户。
 
+管理后台另设本地用户名密码账号，与 OAuth2 影子用户相互独立。后台管理员也可以为 OAuth2 用户授予或撤销管理权限；该权限仅保存在本平台，不回写身份认证中心。
+
 1. 浏览器访问 `{server}/uias/oauth/authorize`，携带 `client_id`、`redirect_uri`、`response_type=code` 和随机 `state`。
 2. 核心后端校验回调中的 `state`，使用授权码请求 `{server}/uias/oauth/access_token`。
 3. 核心后端使用访问令牌请求 `{server}/uias/oauth/userInfo`。
@@ -102,7 +104,7 @@ Spring Boot 创建会话并保存用户消息，从 PostgreSQL 加载历史上�
 - [x] DeepSeek 模型注册、切换和流式对话
 - [x] 对话消息、Token 和每日用量持久化
 - [ ] 文件上传及对象存储
-- [ ] 基础管理后台
+- [x] 基础管理后台
 
 第二阶段加入知识库、OCR 和语音识别；第三阶段加入 Skill、MCP 与安全沙箱；第四阶段实现智能体编排和应用发布。
 
@@ -140,6 +142,8 @@ npm run dev
 ```
 
 访问 `http://127.0.0.1:5173/app` 即可进行流式多轮对话。模型入口位于 `ai-service/config/models.json`；后续切换 vLLM 时，将该文件中的 `provider`、`base_url` 和 `model_name` 替换为本地服务配置，并为 vLLM 配置对应认证策略。
+
+首次启用管理后台前，在 `.env` 配置 `ADMIN_INITIAL_USERNAME`、`ADMIN_INITIAL_PASSWORD` 和 `ADMIN_INITIAL_DISPLAY_NAME`。Spring Boot 启动后会创建首个本地管理员，之后不会用环境变量覆盖已有账号密码。管理后台地址为 `http://127.0.0.1:5173/admin`。
 
 首轮对话创建时先使用用户问题生成临时标题，首轮回答保存后再异步生成 AI 标题。标题模型由 `AI_TITLE_MODEL` 独立配置，目前与主对话共用 `deepseek-chat`；后续注册本地轻量模型后，只需将该变量改为对应模型 key。用户手动修改的标题会标记为 `manual`，异步任务不会覆盖。
 

@@ -3,6 +3,8 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import DOMPurify from 'dompurify'
 import { ElOption, ElSelect } from 'element-plus'
 import { marked } from 'marked'
+import AdminDashboard from './AdminDashboard.vue'
+import { groupConversations, type ConversationSummary } from './conversationHistory'
 import {
   Archive,
   Bot,
@@ -22,6 +24,7 @@ import {
   Settings,
   ShieldCheck,
   Square,
+  Trash2,
   Users,
 } from 'lucide-vue-next'
 
@@ -54,16 +57,6 @@ interface StreamEvent {
   total_tokens?: number
 }
 
-/** Compact persisted conversation shown in the sidebar. */
-interface ConversationSummary {
-  id: string
-  title: string
-  model: string
-  messageCount: number
-  preview: string
-  updatedAt: string
-}
-
 /** Persisted message returned when restoring an existing conversation. */
 interface PersistedMessage {
   role: Role
@@ -75,6 +68,7 @@ interface PersistedMessage {
 
 // Page and conversation state stays local; durable data always comes from Spring Boot.
 const isWorkspace = computed(() => window.location.pathname.startsWith('/app'))
+const isAdmin = computed(() => window.location.pathname.startsWith('/admin'))
 const prompt = ref('')
 const models = ref<ModelInfo[]>([])
 const selectedModel = ref('deepseek-chat')
@@ -90,6 +84,9 @@ const copiedMessageIndex = ref<number | null>(null)
 const serviceOnline = ref(false)
 const editingConversationId = ref<string | null>(null)
 const editingTitle = ref('')
+const historySearch = ref('')
+const historySearchOpen = ref(false)
+const historySearchInput = ref<HTMLInputElement | null>(null)
 let abortController: AbortController | null = null
 
 // Configure GitHub-flavored Markdown once; every rendered result is sanitized below.
@@ -98,6 +95,21 @@ marked.setOptions({ gfm: true, breaks: true })
 const selectedModelName = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.display_name ?? 'DeepSeek Chat'
 })
+
+const conversationGroups = computed(() => {
+  return groupConversations(conversations.value, historySearch.value)
+})
+
+/** Expands or collapses sidebar search and resets filtering when it closes. */
+const toggleHistorySearch = async () => {
+  historySearchOpen.value = !historySearchOpen.value
+  if (!historySearchOpen.value) {
+    historySearch.value = ''
+    return
+  }
+  await nextTick()
+  historySearchInput.value?.focus()
+}
 
 /** Starts the organization's server-managed OAuth2 redirect flow. */
 const login = () => {
@@ -212,6 +224,15 @@ const saveRename = async () => {
     body: JSON.stringify({ title }),
   })
   if (response.ok) await loadConversations()
+}
+
+/** Soft-deletes one conversation after an explicit destructive-action confirmation. */
+const deleteConversation = async (conversation: ConversationSummary) => {
+  if (!window.confirm(`确定删除“${conversation.title || '未命名对话'}”吗？`)) return
+  const response = await fetch(`/api/conversations/${conversation.id}`, { method: 'DELETE' })
+  if (!response.ok) return
+  if (conversationId.value === conversation.id) newConversation()
+  await loadConversations()
 }
 
 /** Keeps the newest streamed content visible without moving the whole document viewport. */
@@ -350,10 +371,11 @@ onMounted(() => {
 </script>
 
 <template>
+  <AdminDashboard v-if="isAdmin" />
   <!-- Authentication entry screen. -->
-  <main v-if="!isWorkspace" class="login-page">
+  <main v-else-if="!isWorkspace" class="login-page">
     <section class="login-panel" aria-labelledby="login-title">
-      <div class="brand-mark"><Bot :size="28" /></div>
+      <img class="login-logo" src="/brand/sitp-logo.jpg" alt="SITP" />
       <p class="product-name">离线智能工作台</p>
       <h1 id="login-title">统一身份认证</h1>
       <p class="login-copy">使用组织账号进入对话、知识库与智能应用平台。</p>
@@ -371,7 +393,10 @@ onMounted(() => {
     <aside class="sidebar" :class="{ open: sidebarOpen }">
       <!-- Product identity and primary navigation. -->
       <div class="sidebar-header">
-        <div class="compact-brand"><span class="brand-symbol"><Bot :size="18" /></span><span>智能工作台</span></div>
+        <div class="compact-brand">
+          <img class="sidebar-logo" src="/brand/sitp-logo.jpg" alt="SITP" />
+          <span>智能工作台</span>
+        </div>
         <button class="icon-button mobile-only" title="关闭侧栏" @click="sidebarOpen = false"><PanelLeftClose :size="19" /></button>
       </div>
 
@@ -388,47 +413,76 @@ onMounted(() => {
       </nav>
 
       <div class="history-section">
-        <!-- Persisted conversations support selection and inline manual renaming. -->
+        <!-- Persisted conversations support search, grouping, selection, rename, and soft deletion. -->
         <div class="section-label">
           <span>最近</span>
-          <button class="icon-button" title="搜索对话"><Search :size="16" /></button>
+          <button
+            class="icon-button"
+            type="button"
+            title="搜索对话"
+            :aria-expanded="historySearchOpen"
+            @click="toggleHistorySearch"
+          >
+            <Search :size="16" />
+          </button>
         </div>
-        <div
-          v-for="conversation in conversations"
-          :key="conversation.id"
-          class="history-row"
-          :class="{ 'active-history': conversation.id === conversationId }"
-        >
+        <div v-if="historySearchOpen" class="history-search">
+          <Search :size="14" />
           <input
-            v-if="editingConversationId === conversation.id"
-            v-model="editingTitle"
-            class="history-rename-input"
-            maxlength="60"
-            autofocus
-            @click.stop
-            @keydown.enter.prevent="saveRename"
-            @keydown.esc.prevent="cancelRename"
-            @blur="saveRename"
+            ref="historySearchInput"
+            v-model="historySearch"
+            type="search"
+            placeholder="搜索对话"
+            aria-label="搜索对话"
+            @keydown.esc="toggleHistorySearch"
           />
-          <template v-else>
-            <button
-              class="history-item"
-              type="button"
-              :title="conversation.preview"
-              @click="openConversation(conversation)"
-            >
-              {{ conversation.title || '未命名对话' }}
-            </button>
-            <button class="history-edit" type="button" title="重命名" @click.stop="startRename(conversation)">
-              <Pencil :size="14" />
-            </button>
-          </template>
         </div>
-        <p v-if="!conversations.length" class="history-empty">暂无对话</p>
+        <template v-for="group in conversationGroups" :key="group.label">
+          <div class="history-group-label">{{ group.label }}</div>
+          <div
+            v-for="conversation in group.conversations"
+            :key="conversation.id"
+            class="history-row"
+            :class="{ 'active-history': conversation.id === conversationId }"
+          >
+            <input
+              v-if="editingConversationId === conversation.id"
+              v-model="editingTitle"
+              class="history-rename-input"
+              maxlength="60"
+              autofocus
+              @click.stop
+              @keydown.enter.prevent="saveRename"
+              @keydown.esc.prevent="cancelRename"
+              @blur="saveRename"
+            />
+            <template v-else>
+              <button
+                class="history-item"
+                type="button"
+                :title="conversation.preview"
+                @click="openConversation(conversation)"
+              >
+                {{ conversation.title || '未命名对话' }}
+              </button>
+              <div class="history-actions">
+                <button type="button" title="重命名" @click.stop="startRename(conversation)">
+                  <Pencil :size="13" />
+                </button>
+                <button type="button" title="删除" @click.stop="deleteConversation(conversation)">
+                  <Trash2 :size="13" />
+                </button>
+              </div>
+            </template>
+          </div>
+        </template>
+        <p v-if="!conversationGroups.length" class="history-empty">
+          {{ historySearch ? '未找到匹配对话' : '暂无对话' }}
+        </p>
       </div>
 
       <div class="sidebar-footer">
-        <a class="nav-item" href="#"><Settings :size="18" />设置</a>
+        <a class="nav-item" href="/admin"><Settings :size="18" />管理后台</a>
         <div class="user-row">
           <div class="avatar">管</div>
           <div class="user-meta"><strong>开发用户</strong><span>本地调试模式</span></div>

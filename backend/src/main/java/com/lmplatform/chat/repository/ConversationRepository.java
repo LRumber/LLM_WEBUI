@@ -140,6 +140,16 @@ public class ConversationRepository {
         return updated > 0;
     }
 
+    /** Hides an owned conversation without removing messages or usage records. */
+    public boolean softDeleteConversation(UUID conversationId, long userId) {
+        int updated = jdbc.update("""
+                UPDATE conversation
+                SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+                """, conversationId, userId);
+        return updated > 0;
+    }
+
     /** Records title-generation usage and rolls it into the current user's daily aggregate. */
     @Transactional
     public void recordTitleUsage(

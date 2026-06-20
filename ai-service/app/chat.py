@@ -142,6 +142,8 @@ class ChatGateway:
             configured = os.getenv(model.api_key_env)
             if configured:
                 return configured
+        if model.api_key:
+            return model.api_key.get_secret_value()
         if model.provider == "deepseek" and self._settings.deepseek_api_key:
             return self._settings.deepseek_api_key.get_secret_value()
         if model.engine.value in {"vllm", "sglang", "ollama", "llama.cpp"}:

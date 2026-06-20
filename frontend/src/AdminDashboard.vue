@@ -53,17 +53,16 @@ interface ModelRegistration {
   display_name: string
   provider: string
   engine: 'vllm' | 'sglang' | 'ollama' | 'llama.cpp' | 'openai-compatible'
+  category: 'language' | 'multimodal'
   base_url: string
   model_name: string
   capabilities: string[]
   enabled: boolean
+  frontend_visible: boolean
   context_window?: number
-  quantization?: string
-  tensor_parallel_size: number
-  gpu_ids: number[]
-  gpu_memory_utilization: number
   max_concurrency: number
   api_key_env?: string
+  api_key?: string
 }
 
 interface PromptTemplate {
@@ -96,10 +95,11 @@ const loginSubmitting = ref(false)
 const modelEditorOpen = ref(false)
 const modelSaving = ref(false)
 const modelHealth = ref<Record<string, string>>({})
+const discoveredModels = ref<string[]>([])
+const discoveringModels = ref(false)
 const modelForm = ref<ModelRegistration>({
-  key: '', display_name: '', provider: 'local', engine: 'vllm', base_url: '', model_name: '',
-  capabilities: ['chat'], enabled: true, context_window: 32768, quantization: '',
-  tensor_parallel_size: 1, gpu_ids: [], gpu_memory_utilization: 0.9, max_concurrency: 4,
+  key: '', display_name: '', provider: 'openai-compatible', engine: 'openai-compatible', category: 'language', base_url: '', model_name: '',
+  capabilities: ['chat'], enabled: true, frontend_visible: true, context_window: 32768, api_key: '', max_concurrency: 4,
 })
 const templateForm = ref({ id: '', name: '', description: '', systemPrompt: '', enabled: true })
 
@@ -222,38 +222,45 @@ const setAdministrator = async (user: AdminUser) => {
 /** Opens a clean registration editor for an OpenAI-compatible inference endpoint. */
 const createModel = () => {
   modelForm.value = {
-    key: '', display_name: '', provider: 'local', engine: 'vllm', base_url: '', model_name: '',
-    capabilities: ['chat'], enabled: true, context_window: 32768, quantization: '',
-    tensor_parallel_size: 1, gpu_ids: [], gpu_memory_utilization: 0.9, max_concurrency: 4,
+    key: '', display_name: '', provider: 'openai-compatible', engine: 'openai-compatible', category: 'language', base_url: '', model_name: '',
+    capabilities: ['chat'], enabled: true, frontend_visible: true, context_window: 32768, api_key: '', max_concurrency: 4,
   }
+  discoveredModels.value = []
   modelEditorOpen.value = true
 }
 
 /** Copies an existing registration so edits remain cancelable until explicitly saved. */
 const editModel = (model: ModelRegistration) => {
-  modelForm.value = JSON.parse(JSON.stringify(model))
+  modelForm.value = { ...JSON.parse(JSON.stringify(model)), api_key: '' }
+  discoveredModels.value = []
   modelEditorOpen.value = true
 }
 
-const gpuIdsText = computed({
-  get: () => modelForm.value.gpu_ids.join(','),
-  set: (value: string) => {
-    modelForm.value.gpu_ids = value.split(',').map((item) => Number(item.trim()))
-      .filter((item) => Number.isInteger(item) && item >= 0)
-  },
-})
+/** Discovers model identifiers using the entered API address and write-only credential. */
+const discoverModels = async () => {
+  if (!modelForm.value.base_url) return
+  discoveringModels.value = true
+  try {
+    const response = await fetch('/api/admin/models/discover', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base_url: modelForm.value.base_url, api_key: modelForm.value.api_key || null }),
+    })
+    discoveredModels.value = response.ok ? await response.json() : []
+    if (!modelForm.value.model_name && discoveredModels.value.length) {
+      modelForm.value.model_name = discoveredModels.value[0]
+    }
+  } finally {
+    discoveringModels.value = false
+  }
+}
 
-const capabilitiesText = computed({
-  get: () => modelForm.value.capabilities.join(','),
-  set: (value: string) => {
-    modelForm.value.capabilities = value.split(',').map((item) => item.trim()).filter(Boolean)
-  },
-})
-
-/** Persists engine, quantization, GPU placement, capability, and concurrency settings atomically. */
+/** Persists API connection, model capability, visibility, and concurrency settings atomically. */
 const saveModel = async () => {
   modelSaving.value = true
   try {
+    modelForm.value.capabilities = modelForm.value.category === 'multimodal'
+      ? [...new Set([...modelForm.value.capabilities, 'chat', 'vision'])]
+      : [...new Set(['chat', ...modelForm.value.capabilities.filter((item) => item !== 'vision')])]
     const response = await fetch(`/api/admin/models/${encodeURIComponent(modelForm.value.key)}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modelForm.value),
     })
@@ -371,7 +378,7 @@ onMounted(checkSession)
         <div class="model-grid">
           <article v-for="model in models" :key="model.key" class="model-card">
             <div class="model-card-heading"><span><Bot :size="18" /></span><div><strong>{{ model.display_name }}</strong><small>{{ model.key }}</small></div><i :class="{ enabled: model.enabled }">{{ model.enabled ? '启用' : '停用' }}</i></div>
-            <dl><div><dt>引擎</dt><dd>{{ model.engine }}</dd></div><div><dt>量化</dt><dd>{{ model.quantization || '无' }}</dd></div><div><dt>GPU</dt><dd>{{ model.gpu_ids.length ? model.gpu_ids.join(', ') : '自动' }}</dd></div><div><dt>并发</dt><dd>{{ model.max_concurrency }}</dd></div></dl>
+            <dl><div><dt>类型</dt><dd>{{ model.category === 'multimodal' ? '多模态' : '大语言模型' }}</dd></div><div><dt>运行</dt><dd>{{ model.enabled ? '启用' : '停用' }}</dd></div><div><dt>前台展示</dt><dd>{{ model.frontend_visible ? '展示' : '隐藏' }}</dd></div><div><dt>上下文</dt><dd>{{ model.context_window || '-' }}</dd></div></dl>
             <p>{{ model.base_url }}</p>
             <div class="model-card-actions"><button type="button" @click="checkModel(model)">{{ modelHealth[model.key] || '健康检查' }}</button><button type="button" @click="editModel(model)">编辑</button><button class="danger" type="button" @click="deleteModel(model)">移除</button></div>
           </article>
@@ -397,23 +404,18 @@ onMounted(checkSession)
 
       <div v-if="adminPage === 'models' && modelEditorOpen" class="model-editor-backdrop" @click.self="modelEditorOpen = false">
         <form class="model-editor" @submit.prevent="saveModel">
-          <div class="panel-heading"><div><h2>{{ models.some((item) => item.key === modelForm.key) ? '编辑模型' : '新增模型' }}</h2><p>所有推理引擎必须提供 OpenAI 兼容端点</p></div><button class="editor-close" type="button" @click="modelEditorOpen = false">×</button></div>
+          <div class="panel-heading"><div><h2>{{ models.some((item) => item.key === modelForm.key) ? '编辑模型' : '接入模型 API' }}</h2><p>填写 OpenAI 兼容 API 地址和密钥后识别模型</p></div><button class="editor-close" type="button" @click="modelEditorOpen = false">×</button></div>
           <div class="model-form-grid">
             <label>模型标识<input v-model="modelForm.key" pattern="[a-z0-9][a-z0-9._-]+" required /></label>
             <label>显示名称<input v-model="modelForm.display_name" required /></label>
-            <label>推理引擎<select v-model="modelForm.engine"><option>vllm</option><option>sglang</option><option>ollama</option><option>llama.cpp</option><option>openai-compatible</option></select></label>
-            <label>Provider<input v-model="modelForm.provider" required /></label>
-            <label class="wide">API 地址<input v-model="modelForm.base_url" type="url" placeholder="http://127.0.0.1:8000/v1" required /></label>
-            <label class="wide">模型名称/路径<input v-model="modelForm.model_name" required /></label>
-            <label>量化版本<input v-model="modelForm.quantization" placeholder="AWQ / GPTQ / Q4_K_M" /></label>
+            <label>模型类型<select v-model="modelForm.category"><option value="language">大语言模型</option><option value="multimodal">多模态模型</option></select></label>
             <label>上下文窗口<input v-model.number="modelForm.context_window" type="number" min="1" /></label>
-            <label>GPU 编号<input v-model="gpuIdsText" placeholder="0,1" /></label>
-            <label>张量并行<input v-model.number="modelForm.tensor_parallel_size" type="number" min="1" max="64" /></label>
-            <label>显存利用率<input v-model.number="modelForm.gpu_memory_utilization" type="number" min="0.01" max="1" step="0.01" /></label>
-            <label>最大并发<input v-model.number="modelForm.max_concurrency" type="number" min="1" max="1024" /></label>
-            <label class="wide">能力（逗号分隔）<input v-model="capabilitiesText" placeholder="chat,vision" required /></label>
-            <label class="wide">密钥环境变量<input v-model="modelForm.api_key_env" placeholder="留空表示本地无密钥端点" /></label>
-            <label class="model-enabled"><input v-model="modelForm.enabled" type="checkbox" />允许用户选择该模型</label>
+            <label class="wide">API 地址<input v-model="modelForm.base_url" type="url" placeholder="http://127.0.0.1:8000/v1" required /></label>
+            <label class="wide">API Key<input v-model="modelForm.api_key" type="password" autocomplete="new-password" placeholder="编辑时留空表示保留原密钥" /></label>
+            <div class="wide discovery-row"><button type="button" :disabled="discoveringModels" @click="discoverModels">{{ discoveringModels ? '识别中…' : '识别 API 中的模型' }}</button><span v-if="discoveredModels.length">发现 {{ discoveredModels.length }} 个模型</span></div>
+            <label class="wide">模型名称<select v-if="discoveredModels.length" v-model="modelForm.model_name"><option v-for="name in discoveredModels" :key="name" :value="name">{{ name }}</option></select><input v-else v-model="modelForm.model_name" placeholder="可手动填写模型 ID" required /></label>
+            <label class="model-enabled"><input v-model="modelForm.enabled" type="checkbox" />启用 API 调用</label>
+            <label class="model-enabled"><input v-model="modelForm.frontend_visible" type="checkbox" />在前台对话模型列表展示</label>
           </div>
           <div class="editor-actions"><button type="button" @click="modelEditorOpen = false">取消</button><button class="primary" type="submit" :disabled="modelSaving">{{ modelSaving ? '保存中…' : '保存模型' }}</button></div>
         </form>
@@ -488,6 +490,7 @@ onMounted(checkSession)
 .panel-action { height: 32px; padding: 0 11px; color: #fff; background: #1f765c; border: 0; border-radius: 6px; font-size: 11px; }.panel-action:hover { background: #185f4a; }
 .model-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 17px; }.model-card { min-width: 0; padding: 15px; border: 1px solid #e4e7e5; border-radius: 9px; }.model-card-heading { display: flex; align-items: center; gap: 9px; }.model-card-heading > span { width: 32px; height: 32px; display: grid; place-items: center; color: #23765d; background: #e9f4f0; border-radius: 7px; }.model-card-heading strong, .model-card-heading small { display: block; }.model-card-heading strong { font-size: 12px; }.model-card-heading small { margin-top: 3px; color: #929895; font-size: 9px; }.model-card-heading i { margin-left: auto; padding: 3px 6px; color: #8a5951; background: #f8ecea; border-radius: 8px; font-size: 9px; font-style: normal; }.model-card-heading i.enabled { color: #187056; background: #e8f4ef; }.model-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0 10px; }.model-card dl div { display: flex; justify-content: space-between; gap: 6px; }.model-card dt { color: #969c99; font-size: 9px; }.model-card dd { margin: 0; color: #4e5753; font-size: 10px; }.model-card > p { overflow: hidden; margin: 0; color: #8a918e; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.model-card-actions { display: flex; gap: 5px; margin-top: 13px; }.model-card-actions button { height: 27px; padding: 0 8px; color: #5f6864; background: #f5f7f6; border: 1px solid #e1e5e3; border-radius: 5px; font-size: 9px; }.model-card-actions button:hover { background: #ebefed; }.model-card-actions button.danger:hover { color: #9a3f35; background: #faeeec; }.model-empty { grid-column: 1 / -1; padding: 25px; color: #939a97; text-align: center; font-size: 11px; }
 .model-editor-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(20, 28, 25, .45); }.model-editor { width: min(100%, 680px); max-height: calc(100vh - 40px); overflow-y: auto; padding: 22px; background: #fff; border-radius: 11px; box-shadow: 0 20px 60px rgba(0,0,0,.2); }.editor-close { width: 30px; height: 30px; color: #737b78; background: transparent; border: 0; border-radius: 6px; font-size: 21px; }.editor-close:hover { background: #f0f2f1; }.model-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 20px; }.model-form-grid label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.model-form-grid label.wide { grid-column: 1 / -1; }.model-form-grid input:not([type=checkbox]), .model-form-grid select { width: 100%; height: 36px; padding: 0 9px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; }.model-form-grid input:focus, .model-form-grid select:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.model-form-grid .model-enabled { display: flex; grid-column: 1 / -1; align-items: center; gap: 8px; }.editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 21px; }.editor-actions button { height: 34px; padding: 0 13px; color: #606966; background: #f4f6f5; border: 1px solid #dde1df; border-radius: 6px; }.editor-actions button.primary { color: #fff; background: #1e745a; border-color: #1e745a; }
+.discovery-row { display: flex; align-items: center; gap: 9px; }.discovery-row button { height: 33px; padding: 0 10px; color: #176d53; background: #e8f3ef; border: 0; border-radius: 6px; font-size: 10px; }.discovery-row span { color: #77817d; font-size: 10px; }
 .prompt-admin-layout { display: grid; grid-template-columns: .8fr 1.2fr; gap: 16px; margin-top: 17px; }.prompt-admin-list { max-height: 290px; overflow-y: auto; }.prompt-admin-list article { padding: 11px; border: 1px solid #e3e6e4; border-radius: 7px; cursor: pointer; }.prompt-admin-list article + article { margin-top: 7px; }.prompt-admin-list article:hover { background: #f7f9f8; }.prompt-admin-list article > div { display: flex; justify-content: space-between; }.prompt-admin-list strong { font-size: 11px; }.prompt-admin-list span { color: #187056; font-size: 9px; }.prompt-admin-list span.off { color: #9a5148; }.prompt-admin-list p { margin: 6px 0 0; color: #8b928f; font-size: 9px; }.prompt-admin-form { display: grid; gap: 10px; }.prompt-admin-form label { display: grid; gap: 5px; color: #5d6662; font-size: 10px; font-weight: 600; }.prompt-admin-form input:not([type=checkbox]), .prompt-admin-form textarea { padding: 8px 9px; border: 1px solid #d8dcda; border-radius: 6px; outline: 0; resize: vertical; }.prompt-admin-form .prompt-enabled { display: flex; align-items: center; gap: 6px; }.prompt-admin-form > button { height: 34px; color: #fff; background: #1e745a; border: 0; border-radius: 6px; }
 .usage-chart { min-height: 190px; display: flex; align-items: flex-end; gap: 14px; padding: 25px 8px 0; opacity: 1; transition: opacity .15s; }.usage-chart.loading { opacity: .45; }.usage-column { min-width: 0; height: 165px; display: flex; flex: 1; flex-direction: column; align-items: center; }.bar-area { width: min(44px, 70%); height: 112px; display: flex; align-items: flex-end; }.usage-bar { width: 100%; min-height: 4px; background: linear-gradient(180deg, #42a887, #197559); border-radius: 5px 5px 2px 2px; }.usage-column strong { margin-top: 8px; color: #59615e; font-size: 10px; }.usage-column span { margin-top: 5px; color: #949a98; font-size: 10px; }.empty-chart { width: 100%; align-self: center; color: #9aa09e; text-align: center; font-size: 12px; }
 .table-wrap { margin-top: 16px; overflow-x: auto; }table { width: 100%; border-collapse: collapse; font-size: 12px; }th { padding: 10px 12px; color: #8a918e; background: #f7f8f8; font-size: 10px; font-weight: 600; text-align: left; }td { padding: 12px; color: #59615e; border-bottom: 1px solid #eef0ef; }.table-user { display: flex; align-items: center; gap: 9px; }.table-user > span { width: 27px; height: 27px; display: grid; place-items: center; color: #fff; background: #527a6d; border-radius: 50%; font-size: 10px; }.table-user strong { color: #303633; font-size: 12px; }.status-pill { padding: 3px 7px; color: #197357; background: #e9f5f0; border-radius: 10px; font-size: 10px; }.status-pill.inactive { color: #8b4941; background: #f8eae8; }.empty-table { padding: 28px; color: #969c99; text-align: center; }

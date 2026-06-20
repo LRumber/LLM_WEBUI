@@ -30,6 +30,12 @@ public class AdminModelController {
         return aiServiceClient.listAllModels();
     }
 
+    /** Recognizes model ids without persisting the submitted credential or connection. */
+    @PostMapping(value = "/discover", produces = MediaType.APPLICATION_JSON_VALUE)
+    public String discover(@RequestBody JsonNode connection) {
+        return aiServiceClient.discoverModels(connection);
+    }
+
     /** Validates and persists one model through the provider-neutral AI gateway. */
     @PutMapping(value = "/{key}", produces = MediaType.APPLICATION_JSON_VALUE)
     public String upsert(@PathVariable String key, @RequestBody JsonNode model) {

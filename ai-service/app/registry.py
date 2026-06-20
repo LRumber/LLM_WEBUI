@@ -6,6 +6,8 @@ from pathlib import Path
 from threading import RLock
 
 from app.models import ModelEndpoint
+from app.credentials import ModelCredentialStore
+from pydantic import SecretStr
 
 
 class ModelRegistry:
@@ -16,6 +18,7 @@ class ModelRegistry:
         self._config_path = Path(config_path)
         self._models: dict[str, ModelEndpoint] = {}
         self._lock = RLock()
+        self._credentials = ModelCredentialStore(self._config_path)
 
     def load(self) -> None:
         """Reload all registrations atomically; a missing file represents an empty registry."""
@@ -24,7 +27,11 @@ class ModelRegistry:
             return
 
         payload = json.loads(self._config_path.read_text(encoding="utf-8"))
-        models = [ModelEndpoint.model_validate(item) for item in payload.get("models", [])]
+        models = []
+        for item in payload.get("models", []):
+            model = ModelEndpoint.model_validate(item)
+            api_key = self._credentials.get(model.key)
+            models.append(model.model_copy(update={"api_key": SecretStr(api_key) if api_key else None}))
         with self._lock:
             self._models = {model.key: model for model in models}
 
@@ -32,6 +39,11 @@ class ModelRegistry:
         """Return models currently available to platform users."""
         with self._lock:
             return [model for model in self._models.values() if model.enabled]
+
+    def list_user_visible(self) -> list[ModelEndpoint]:
+        """Return callable models explicitly allowed in the conversation model selector."""
+        with self._lock:
+            return [model for model in self._models.values() if model.enabled and model.frontend_visible]
 
     def list_all(self) -> list[ModelEndpoint]:
         """Return every registration for administration, including disabled models."""
@@ -47,6 +59,12 @@ class ModelRegistry:
     def upsert(self, model: ModelEndpoint) -> ModelEndpoint:
         """Atomically persist a validated registration and publish it to new requests."""
         with self._lock:
+            supplied_key = model.api_key.get_secret_value() if model.api_key else ""
+            if supplied_key and supplied_key != "**********":
+                self._credentials.put(model.key, supplied_key)
+            else:
+                existing = self._models.get(model.key)
+                model = model.model_copy(update={"api_key": existing.api_key if existing else None})
             self._models[model.key] = model
             self._persist()
         return model
@@ -57,6 +75,7 @@ class ModelRegistry:
             if key not in self._models:
                 return False
             del self._models[key]
+            self._credentials.delete(key)
             self._persist()
         return True
 

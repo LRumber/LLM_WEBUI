@@ -54,6 +54,17 @@ public class AiServiceClient {
                 .body(String.class);
     }
 
+    /** Discovers model ids from an administrator-supplied OpenAI-compatible endpoint. */
+    public String discoverModels(JsonNode connection) {
+        return restClient.post()
+                .uri("/internal/models/discover")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .body(connection)
+                .retrieve()
+                .body(String.class);
+    }
+
     /** Creates or replaces a dynamic model registration in the AI gateway. */
     public String upsertModel(String key, JsonNode model) {
         return restClient.put()
@@ -106,7 +117,7 @@ public class AiServiceClient {
      * Sends an OpenAI-compatible conversation and forwards each normalized SSE event as it arrives.
      * The response is consumed inside the exchange callback so the underlying connection stays open.
      */
-    public void streamChat(String model, List<Map<String, String>> messages, EventConsumer consumer)
+    public void streamChat(String model, List<? extends Map<String, ?>> messages, EventConsumer consumer)
             throws IOException {
         Map<String, Object> payload = Map.of("model", model, "messages", messages);
         restClient.post()

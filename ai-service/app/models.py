@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, SecretStr
 
 
 class ModelCapability(StrEnum):
@@ -26,23 +26,36 @@ class InferenceEngine(StrEnum):
     OPENAI_COMPATIBLE = "openai-compatible"
 
 
+class ModelCategory(StrEnum):
+    """User-facing model classes that drive multimodal compatibility checks."""
+
+    LANGUAGE = "language"
+    MULTIMODAL = "multimodal"
+
+
 class ModelEndpoint(BaseModel):
     """Validated local registration for an OpenAI-compatible inference endpoint."""
     key: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]+$")
     display_name: str
     provider: str
     engine: InferenceEngine = InferenceEngine.OPENAI_COMPATIBLE
+    category: ModelCategory = ModelCategory.LANGUAGE
     base_url: HttpUrl
     model_name: str
     capabilities: set[ModelCapability]
     enabled: bool = True
+    frontend_visible: bool = True
     context_window: int | None = Field(default=None, gt=0)
-    quantization: str | None = None
-    tensor_parallel_size: int = Field(default=1, ge=1, le=64)
-    gpu_ids: list[int] = Field(default_factory=list)
-    gpu_memory_utilization: float = Field(default=0.9, gt=0, le=1)
     max_concurrency: int = Field(default=4, ge=1, le=1024)
     api_key_env: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]*$")
+    api_key: SecretStr | None = Field(default=None, exclude=True)
+
+
+class ModelDiscoveryRequest(BaseModel):
+    """Credentials used once to discover model ids from an OpenAI-compatible endpoint."""
+
+    base_url: HttpUrl
+    api_key: SecretStr | None = None
 
 
 class HealthResponse(BaseModel):

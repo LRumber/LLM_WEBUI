@@ -1,30 +1,30 @@
 {
   "models": [
     {
-      "key": "local-chat",
-      "display_name": "本地对话模型",
-      "provider": "vllm",
-      "engine": "vllm",
-      "base_url": "http://model-server:8000/v1",
-      "model_name": "/models/chat-model",
+      "key": "enterprise-chat",
+      "display_name": "企业大语言模型",
+      "provider": "openai-compatible",
+      "engine": "openai-compatible",
+      "base_url": "https://model-gateway.example.com/v1",
+      "model_name": "chat-model",
+      "category": "language",
       "capabilities": ["chat"],
       "enabled": true,
+      "frontend_visible": true,
       "context_window": 32768,
-      "quantization": "awq",
-      "tensor_parallel_size": 2,
-      "gpu_ids": [0, 1],
-      "gpu_memory_utilization": 0.9,
       "max_concurrency": 8
     },
     {
-      "key": "local-vision",
-      "display_name": "本地视觉模型",
-      "provider": "vllm",
-      "engine": "vllm",
-      "base_url": "http://vision-server:8000/v1",
-      "model_name": "/models/vision-model",
+      "key": "enterprise-vision",
+      "display_name": "企业多模态模型",
+      "provider": "openai-compatible",
+      "engine": "openai-compatible",
+      "base_url": "https://model-gateway.example.com/v1",
+      "model_name": "vision-model",
+      "category": "multimodal",
       "capabilities": ["chat", "vision"],
-      "enabled": false,
+      "enabled": true,
+      "frontend_visible": false,
       "context_window": 32768
     }
   ]

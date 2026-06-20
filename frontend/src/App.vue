@@ -5,6 +5,7 @@ import { ElOption, ElSelect } from 'element-plus'
 import { marked } from 'marked'
 import AdminDashboard from './AdminDashboard.vue'
 import { groupConversations, type ConversationSummary } from './conversationHistory'
+import { assessFileCompatibility } from './fileCompatibility'
 import {
   Archive,
   Bot,
@@ -125,6 +126,9 @@ marked.setOptions({ gfm: true, breaks: true })
 const selectedModelName = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.display_name ?? 'DeepSeek Chat'
 })
+const selectedModelCapabilities = computed(() => {
+  return models.value.find((model) => model.key === selectedModel.value)?.capabilities ?? []
+})
 
 const conversationGroups = computed(() => {
   return groupConversations(conversations.value, historySearch.value)
@@ -204,6 +208,20 @@ const loadPromptTemplates = async () => {
   }
 }
 
+/** Polls durable processing state so extracted content is ready before a message can be sent. */
+const waitForFileReady = async (fileId: string) => {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1000))
+    const response = await fetch('/api/files')
+    if (!response.ok) return
+    const files: UploadedFile[] = await response.json()
+    const latest = files.find((file) => file.id === fileId)
+    const current = attachments.value.find((file) => file.id === fileId)
+    if (latest && current) Object.assign(current, latest)
+    if (!latest || latest.status === 'ready' || latest.status === 'failed') return
+  }
+}
+
 /** Opens the personal-template editor while system templates remain read-only. */
 const editPromptTemplate = (template?: PromptTemplate) => {
   editingTemplateId.value = template?.id ?? null
@@ -248,10 +266,19 @@ const uploadFiles = async (event: Event) => {
   uploadingFile.value = true
   try {
     for (const file of files.slice(0, 20 - attachments.value.length)) {
+      const compatibility = assessFileCompatibility(file, selectedModelCapabilities.value)
+      if (!compatibility.supported) {
+        window.alert(`${file.name}：${compatibility.reason}`)
+        continue
+      }
       const body = new FormData()
       body.append('file', file)
       const response = await fetch('/api/files', { method: 'POST', body })
-      if (response.ok) attachments.value.push(await response.json())
+      if (response.ok) {
+        const uploaded: UploadedFile = await response.json()
+        attachments.value.push(uploaded)
+        void waitForFileReady(uploaded.id)
+      }
     }
   } finally {
     uploadingFile.value = false
@@ -726,7 +753,7 @@ onMounted(() => {
         <!-- The composer owns file/voice placeholders, cancellation, and keyboard submission. -->
         <div class="composer">
           <div v-if="attachments.length" class="attachment-list">
-            <span v-for="file in attachments" :key="file.id"><Paperclip :size="12" />{{ file.originalName }}<button type="button" title="移除附件" @click="attachments = attachments.filter((item) => item.id !== file.id)">×</button></span>
+            <span v-for="file in attachments" :key="file.id"><Paperclip :size="12" />{{ file.originalName }}<i v-if="file.status !== 'ready'">{{ file.status === 'failed' ? '失败' : '处理中' }}</i><button type="button" title="移除附件" @click="attachments = attachments.filter((item) => item.id !== file.id)">×</button></span>
           </div>
           <textarea
             ref="promptInput"
@@ -750,7 +777,7 @@ onMounted(() => {
               <button class="knowledge-button" type="button" disabled><Library :size="16" />知识库</button>
             </div>
             <button v-if="isGenerating" class="send-button stop-button" type="button" title="停止生成" @click="stopGeneration"><Square :size="15" /></button>
-            <button v-else class="send-button" type="button" title="发送" :disabled="!prompt.trim()" @click="sendPrompt()"><Send :size="18" /></button>
+            <button v-else class="send-button" type="button" title="发送" :disabled="!prompt.trim() || attachments.some((file) => file.status !== 'ready')" @click="sendPrompt()"><Send :size="18" /></button>
           </div>
         </div>
         <p class="composer-note">内容由 AI 生成，请核实重要信息</p>

@@ -39,7 +39,7 @@ FastAPI AI 服务
 | Web | Vue 3、TypeScript、Vite、Element Plus |
 | 核心后端 | Java 21、Spring Boot 3、Spring Security |
 | AI 服务 | Python 3.11、FastAPI、Pydantic |
-| 模型推理 | vLLM / SGLang / llama.cpp，统一 OpenAI 兼容接口 |
+| 模型接入 | 管理后台配置 OpenAI 兼容 API 地址与 API Key |
 | 数据库 | PostgreSQL、pgvector |
 | 缓存 | Redis |
 | 文件存储 | MinIO |
@@ -147,7 +147,9 @@ cd ../frontend
 npm run dev
 ```
 
-访问 `http://127.0.0.1:5173/app` 即可进行流式多轮对话。模型入口位于 `ai-service/config/models.json`；后续切换 vLLM 时，将该文件中的 `provider`、`base_url` 和 `model_name` 替换为本地服务配置，并为 vLLM 配置对应认证策略。
+访问 `http://127.0.0.1:5173/app` 即可进行流式多轮对话。管理员在 `/admin/models` 填写 OpenAI 兼容 API 地址和 API Key，可自动发现模型，并分别设置模型类型、运行状态和前台可见性。API Key 由 AI 服务加密保存，不会通过查询接口返回。
+
+Windows 本地依赖、OCR 语言包和 Docker 服务启动方式见 [运行依赖说明](docs/runtime-dependencies.md)。
 
 首次启用管理后台前，在 `.env` 配置 `ADMIN_INITIAL_USERNAME`、`ADMIN_INITIAL_PASSWORD` 和 `ADMIN_INITIAL_DISPLAY_NAME`。Spring Boot 启动后会创建首个本地管理员，之后不会用环境变量覆盖已有账号密码。管理后台地址为 `http://127.0.0.1:5173/admin`。
 

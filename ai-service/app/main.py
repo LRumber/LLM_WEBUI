@@ -3,13 +3,14 @@
 import json
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.chat import ChatConfigurationError, ChatGateway, ModelBusyError, UpstreamChatError
 from app.config import get_settings
 from app.documents import DocumentParseError, DocumentParser
-from app.models import ChatRequest, HealthResponse, ModelEndpoint, ModelHealthResponse, ParsedDocument
+from app.models import ChatRequest, HealthResponse, ModelDiscoveryRequest, ModelEndpoint, ModelHealthResponse, ParsedDocument
 from app.registry import ModelRegistry
 
 settings = get_settings()
@@ -46,7 +47,23 @@ def health() -> HealthResponse:
 @app.get("/v1/models", response_model=list[ModelEndpoint])
 def list_models() -> list[ModelEndpoint]:
     """List models that administrators have enabled in the local registry."""
-    return registry.list_enabled()
+    return registry.list_user_visible()
+
+
+@app.post("/internal/models/discover", response_model=list[str])
+async def discover_models(request: ModelDiscoveryRequest) -> list[str]:
+    """Recognize model ids exposed by an administrator-supplied OpenAI-compatible API."""
+    headers = {}
+    if request.api_key:
+        headers["Authorization"] = f"Bearer {request.api_key.get_secret_value()}"
+    url = f"{str(request.base_url).rstrip('/')}/models"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+        return [str(item["id"]) for item in response.json().get("data", []) if item.get("id")]
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Model discovery failed: {str(exc)[:300]}") from exc
 
 
 @app.get("/internal/models", response_model=list[ModelEndpoint])

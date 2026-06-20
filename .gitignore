@@ -27,3 +27,7 @@ frontend/vite.config.d.ts
 
 # Temporary files
 tmp/
+
+# Runtime-encrypted model credentials
+ai-service/config/.model-secret.key
+ai-service/config/model-secrets.json

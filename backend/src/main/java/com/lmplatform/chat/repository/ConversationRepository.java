@@ -3,6 +3,8 @@ package com.lmplatform.chat.repository;
 import com.lmplatform.chat.model.ConversationMessage;
 import com.lmplatform.chat.model.ConversationSummary;
 import com.lmplatform.chat.model.PromptTemplate;
+import com.lmplatform.chat.model.ModelContextMessage;
+import com.lmplatform.chat.model.ModelMessageAttachment;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -100,6 +102,41 @@ public class ConversationRepository {
                 "role", rs.getString("role"),
                 "content", rs.getString("content")
         ), conversationId, limit);
+    }
+
+    /** Loads bounded active context with private image object references for multimodal requests. */
+    public List<ModelContextMessage> modelContextMessages(UUID conversationId, int limit) {
+        return jdbc.query("""
+                SELECT id, role, content FROM (
+                    SELECT cm.id, cm.role,
+                           cm.content || COALESCE((
+                               SELECT string_agg(E'\n\n[附件: ' || fa.original_name || E']\n' ||
+                                                 COALESCE(fa.extracted_text, ''), '' ORDER BY ma.position)
+                               FROM message_attachment ma JOIN file_asset fa ON fa.id = ma.file_id
+                               WHERE ma.message_id = cm.id AND fa.status = 'ready'
+                                 AND fa.asset_kind <> 'image'
+                           ), '') AS content,
+                           cm.sequence_no
+                    FROM conversation_message cm
+                    WHERE cm.conversation_id = ? AND cm.status = 'completed'
+                      AND cm.superseded_at IS NULL AND cm.content <> ''
+                    ORDER BY cm.sequence_no DESC LIMIT ?
+                ) recent_messages ORDER BY sequence_no
+                """, (rs, rowNum) -> {
+            UUID messageId = rs.getObject("id", UUID.class);
+            List<ModelMessageAttachment> attachments = jdbc.query("""
+                    SELECT fa.object_key, fa.media_type, fa.asset_kind
+                    FROM message_attachment ma JOIN file_asset fa ON fa.id = ma.file_id
+                    WHERE ma.message_id = ? AND fa.status = 'ready' AND fa.asset_kind = 'image'
+                    ORDER BY ma.position
+                    """, (attachmentRs, attachmentRow) -> new ModelMessageAttachment(
+                    attachmentRs.getString("object_key"), attachmentRs.getString("media_type"),
+                    attachmentRs.getString("asset_kind")
+            ), messageId);
+            return new ModelContextMessage(
+                    rs.getString("role"), rs.getString("content"), attachments
+            );
+        }, conversationId, limit);
     }
 
     /** Preserves the legacy unbounded call for title generation and focused unit tests. */

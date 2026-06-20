@@ -5,11 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lmplatform.chat.client.AiServiceClient;
 import com.lmplatform.chat.config.AiServiceProperties;
 import com.lmplatform.chat.model.ChatStreamRequest;
+import com.lmplatform.chat.model.ModelContextMessage;
 import com.lmplatform.chat.repository.ConversationRepository;
+import com.lmplatform.file.service.ObjectStorageService;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -24,19 +29,22 @@ public class ChatService {
     private final ObjectMapper objectMapper;
     private final TitleGenerationService titleGenerationService;
     private final int maxContextMessages;
+    private final ObjectStorageService objectStorageService;
 
     public ChatService(
             ConversationRepository repository,
             AiServiceClient aiServiceClient,
             ObjectMapper objectMapper,
             TitleGenerationService titleGenerationService,
-            AiServiceProperties properties
+            AiServiceProperties properties,
+            ObjectStorageService objectStorageService
     ) {
         this.repository = repository;
         this.aiServiceClient = aiServiceClient;
         this.objectMapper = objectMapper;
         this.titleGenerationService = titleGenerationService;
         this.maxContextMessages = Math.max(2, properties.maxContextMessages());
+        this.objectStorageService = objectStorageService;
     }
 
     /**
@@ -114,7 +122,7 @@ public class ChatService {
         try {
             aiServiceClient.streamChat(
                     model,
-                    repository.modelMessages(conversationId, maxContextMessages),
+                    buildModelMessages(conversationId),
                     event -> handleAiEvent(event, output, assistantContent, inputTokens, outputTokens, firstTokenAt)
             );
             int durationMs = elapsedMs(startedAt);
@@ -161,6 +169,38 @@ public class ChatService {
                 // The partial response has already been persisted.
             }
         }
+    }
+
+    /** Builds text or OpenAI-compatible image content without exposing MinIO outside the core service. */
+    private List<Map<String, ?>> buildModelMessages(UUID conversationId) throws IOException {
+        List<Map<String, ?>> result = new ArrayList<>();
+        for (ModelContextMessage message : repository.modelContextMessages(
+                conversationId, maxContextMessages
+        )) {
+            if (message.attachments().isEmpty()) {
+                result.add(Map.of("role", message.role(), "content", message.content()));
+                continue;
+            }
+            List<Map<String, ?>> parts = new ArrayList<>();
+            if (!message.content().isBlank()) {
+                parts.add(Map.of("type", "text", "text", message.content()));
+            }
+            for (var attachment : message.attachments()) {
+                try {
+                    byte[] bytes = objectStorageService.get(attachment.objectKey(), 20 * 1024 * 1024);
+                    String dataUrl = "data:" + attachment.mediaType() + ";base64,"
+                            + Base64.getEncoder().encodeToString(bytes);
+                    parts.add(Map.of(
+                            "type", "image_url",
+                            "image_url", Map.of("url", dataUrl, "detail", "auto")
+                    ));
+                } catch (Exception exception) {
+                    throw new IOException("Failed to load multimodal image", exception);
+                }
+            }
+            result.add(Map.of("role", message.role(), "content", parts));
+        }
+        return result;
     }
 
     private void handleAiEvent(

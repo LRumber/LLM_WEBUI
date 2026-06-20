@@ -25,6 +25,20 @@ class AdminModelControllerTest {
         verify(client).upsertModel("local-chat", model);
     }
 
+    /** Confirms discovery credentials are forwarded without being logged or persisted by Java. */
+    @Test
+    void proxiesOpenAiCompatibleModelDiscovery() throws Exception {
+        AiServiceClient client = mock(AiServiceClient.class);
+        var connection = new ObjectMapper().readTree("""
+                {"base_url":"https://example.invalid/v1","api_key":"temporary-secret"}
+                """);
+        when(client.discoverModels(connection)).thenReturn("[\"chat-model\",\"vision-model\"]");
+
+        assertThat(new AdminModelController(client).discover(connection))
+                .contains("chat-model", "vision-model");
+        verify(client).discoverModels(connection);
+    }
+
     @Test
     void deletesOnlyModelRegistration() {
         AiServiceClient client = mock(AiServiceClient.class);

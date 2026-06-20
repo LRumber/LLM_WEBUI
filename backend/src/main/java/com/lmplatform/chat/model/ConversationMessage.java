@@ -1,6 +1,7 @@
 package com.lmplatform.chat.model;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 /** Read model returned when a client restores persisted conversation history. */
@@ -12,6 +13,7 @@ public record ConversationMessage(
         int inputTokens,
         int outputTokens,
         OffsetDateTime createdAt,
-        OffsetDateTime editedAt
+        OffsetDateTime editedAt,
+        List<ConversationAttachment> attachments
 ) {
 }

@@ -41,6 +41,7 @@ interface ChatMessage {
   content: string
   error?: boolean
   editedAt?: string | null
+  attachments?: UploadedFile[]
 }
 
 /** Model registration exposed through the Java proxy. */
@@ -71,6 +72,7 @@ interface PersistedMessage {
   inputTokens: number
   outputTokens: number
   editedAt?: string | null
+  attachments?: UploadedFile[]
 }
 
 interface PromptTemplate {
@@ -310,6 +312,7 @@ const openConversation = async (conversation: ConversationSummary) => {
       content: message.content,
       error: message.status === 'failed',
       editedAt: message.editedAt,
+      attachments: message.attachments ?? [],
     }))
   const lastAssistant = [...persisted].reverse().find((message) => message.role === 'assistant')
   usage.value = lastAssistant
@@ -475,12 +478,16 @@ const sendPrompt = async (preset?: string) => {
     return
   }
   const isFirstMessage = conversationId.value === null
+  // Move a snapshot onto the outgoing message before clearing the composer attachment tray.
+  const sentAttachments = attachments.value.map((file) => ({ ...file }))
+  const attachmentIds = sentAttachments.map((file) => file.id)
 
-  const userMessage: ChatMessage = { role: 'user', content }
+  const userMessage: ChatMessage = { role: 'user', content, attachments: sentAttachments }
   const assistantMessage: ChatMessage = { role: 'assistant', content: '' }
   messages.value.push(userMessage, assistantMessage)
   const assistantIndex = messages.value.length - 1
   prompt.value = ''
+  attachments.value = []
   await nextTick()
   resizeComposer()
   usage.value = { prompt: 0, completion: 0, total: 0 }
@@ -497,7 +504,7 @@ const sendPrompt = async (preset?: string) => {
         model: selectedModel.value,
         content,
         templateId: isFirstMessage && selectedTemplateId.value ? selectedTemplateId.value : null,
-        attachmentIds: attachments.value.map((file) => file.id),
+        attachmentIds,
       }),
       signal: abortController.signal,
     })
@@ -509,7 +516,6 @@ const sendPrompt = async (preset?: string) => {
       throw new Error(detail || `请求失败（${response.status}）`)
     }
     await consumeEventStream(response, assistantIndex)
-    attachments.value = []
   } catch (error) {
     const assistant = messages.value[assistantIndex]
     if ((error as Error).name === 'AbortError') {
@@ -734,6 +740,12 @@ onMounted(() => {
             <div v-if="message.role === 'assistant'" class="message-avatar"><Bot :size="17" /></div>
             <div class="message-column">
               <div class="message-body" :class="{ error: message.error }">
+                <div v-if="message.attachments?.length" class="message-attachments">
+                  <span v-for="file in message.attachments" :key="file.id" class="message-attachment">
+                    <Paperclip :size="14" />
+                    <span><strong>{{ file.originalName }}</strong><small>{{ file.status === 'ready' ? '已接收' : file.status }}</small></span>
+                  </span>
+                </div>
                 <div v-if="message.content && message.role === 'assistant'" class="markdown-body" v-html="renderMarkdown(message.content)"></div>
                 <p v-else-if="message.content">{{ message.content }}</p>
                 <div v-else class="typing-indicator" aria-label="模型正在生成"><i></i><i></i><i></i></div>

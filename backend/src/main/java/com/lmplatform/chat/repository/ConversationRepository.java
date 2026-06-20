@@ -1,12 +1,15 @@
 package com.lmplatform.chat.repository;
 
 import com.lmplatform.chat.model.ConversationMessage;
+import com.lmplatform.chat.model.ConversationAttachment;
 import com.lmplatform.chat.model.ConversationSummary;
 import com.lmplatform.chat.model.PromptTemplate;
 import com.lmplatform.chat.model.ModelContextMessage;
 import com.lmplatform.chat.model.ModelMessageAttachment;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -482,7 +485,7 @@ public class ConversationRepository {
 
     /** Returns ordered persisted messages after enforcing conversation ownership. */
     public List<ConversationMessage> listMessages(UUID conversationId, long userId) {
-        return jdbc.query("""
+        List<ConversationMessage> messages = jdbc.query("""
                 SELECT cm.id, cm.role, cm.content, cm.status, cm.input_tokens, cm.output_tokens,
                        cm.created_at, cm.edited_at
                 FROM conversation_message cm
@@ -498,7 +501,30 @@ public class ConversationRepository {
                 rs.getInt("input_tokens"),
                 rs.getInt("output_tokens"),
                 rs.getObject("created_at", OffsetDateTime.class),
-                rs.getObject("edited_at", OffsetDateTime.class)
+                rs.getObject("edited_at", OffsetDateTime.class),
+                List.of()
         ), conversationId, userId);
+        Map<UUID, List<ConversationAttachment>> attachments = new HashMap<>();
+        jdbc.query("""
+                SELECT ma.message_id, fa.id, fa.original_name, fa.media_type, fa.asset_kind, fa.status
+                FROM message_attachment ma
+                JOIN file_asset fa ON fa.id = ma.file_id
+                JOIN conversation_message cm ON cm.id = ma.message_id
+                JOIN conversation c ON c.id = cm.conversation_id
+                WHERE cm.conversation_id = ? AND c.user_id = ? AND c.deleted_at IS NULL
+                ORDER BY ma.message_id, ma.position
+                """, rs -> {
+            attachments.computeIfAbsent(
+                    rs.getObject("message_id", UUID.class), ignored -> new ArrayList<>()
+            ).add(new ConversationAttachment(
+                    rs.getObject("id", UUID.class), rs.getString("original_name"),
+                    rs.getString("media_type"), rs.getString("asset_kind"), rs.getString("status")
+            ));
+        }, conversationId, userId);
+        return messages.stream().map(message -> new ConversationMessage(
+                message.id(), message.role(), message.content(), message.status(),
+                message.inputTokens(), message.outputTokens(), message.createdAt(), message.editedAt(),
+                List.copyOf(attachments.getOrDefault(message.id(), List.of()))
+        )).toList();
     }
 }

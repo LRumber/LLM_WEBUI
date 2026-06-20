@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import DOMPurify from 'dompurify'
 import {
-  ElDropdown, ElDropdownItem, ElDropdownMenu, ElOption, ElProgress, ElSelect, ElSwitch, ElTag,
+  ElDropdown, ElDropdownItem, ElDropdownMenu, ElOption, ElProgress, ElSelect, ElTag,
 } from 'element-plus'
 import { marked } from 'marked'
 import AdminDashboard from './AdminDashboard.vue'
@@ -178,6 +178,11 @@ const conversationGroups = computed(() => {
 /** Applies a sidebar prompt choice; an empty command always means the platform default. */
 const selectPromptTemplate = (command: string | number | object) => {
   selectedTemplateId.value = String(command)
+}
+
+/** Converts the compact composer dropdown choice into the model request flag. */
+const selectThinkingMode = (command: string | number | object) => {
+  thinkingEnabled.value = String(command) === 'thinking'
 }
 
 /** Expands or collapses sidebar search and resets filtering when it closes. */
@@ -685,8 +690,8 @@ onMounted(() => {
         <div class="section-label"><span>提示词设置</span><button class="icon-button" type="button" title="管理提示词" @click="templateManagerOpen = true"><Settings :size="15" /></button></div>
         <ElDropdown trigger="click" :disabled="messages.length > 0" @command="selectPromptTemplate">
           <button class="sidebar-prompt-trigger" type="button">
-            <span class="sidebar-prompt-icon"><Settings :size="16" /></span>
-            <span><small>当前提示词</small><strong>{{ selectedTemplateName }}</strong></span>
+            <Settings :size="16" />
+            <span>{{ selectedTemplateName }}</span>
             <ChevronDown :size="15" />
           </button>
           <template #dropdown>
@@ -884,18 +889,26 @@ onMounted(() => {
           ></textarea>
           <div class="composer-toolbar">
             <div class="input-tools">
-              <label class="thinking-toggle" title="控制兼容模型是否启用推理思考模式">
-                <BrainCircuit :size="16" />
-                <span>思考模式</span>
-                <ElSwitch v-model="thinkingEnabled" size="small" inline-prompt active-text="开" inactive-text="关" />
-              </label>
               <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
               <button class="icon-button" type="button" title="上传文件或图片" :disabled="uploadingFile" @click="fileInput?.click()"><Paperclip :size="19" /></button>
               <button class="icon-button" title="语音输入" disabled><Mic :size="19" /></button>
               <button class="knowledge-button" type="button" disabled><Library :size="16" />知识库</button>
             </div>
-            <button v-if="isGenerating" class="send-button stop-button" type="button" title="停止生成" @click="stopGeneration"><Square :size="15" /></button>
-            <button v-else class="send-button" type="button" title="发送" :disabled="!prompt.trim() || attachments.some((file) => file.status !== 'ready')" @click="sendPrompt()"><Send :size="18" /></button>
+            <div class="composer-actions">
+              <ElDropdown trigger="click" placement="top-end" @command="selectThinkingMode">
+                <button class="thinking-menu-trigger" :class="{ active: thinkingEnabled }" type="button" title="选择回答模式">
+                  <BrainCircuit :size="15" /><span>{{ thinkingEnabled ? '深度思考' : '快速回答' }}</span><ChevronDown :size="13" />
+                </button>
+                <template #dropdown>
+                  <ElDropdownMenu>
+                    <ElDropdownItem command="fast" :class="{ selected: !thinkingEnabled }"><span class="thinking-option"><Bot :size="15" /><span><strong>快速回答</strong><small>直接生成答案</small></span></span></ElDropdownItem>
+                    <ElDropdownItem command="thinking" :class="{ selected: thinkingEnabled }"><span class="thinking-option"><BrainCircuit :size="15" /><span><strong>深度思考</strong><small>启用模型推理</small></span></span></ElDropdownItem>
+                  </ElDropdownMenu>
+                </template>
+              </ElDropdown>
+              <button v-if="isGenerating" class="send-button stop-button" type="button" title="停止生成" @click="stopGeneration"><Square :size="15" /></button>
+              <button v-else class="send-button" type="button" title="发送" :disabled="!prompt.trim() || attachments.some((file) => file.status !== 'ready')" @click="sendPrompt()"><Send :size="18" /></button>
+            </div>
           </div>
         </div>
         <p class="composer-note">内容由 AI 生成，请核实重要信息</p>

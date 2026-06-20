@@ -106,13 +106,11 @@ button:disabled { cursor: not-allowed; }
 
 .sidebar-prompt-section { margin-top: 15px; }
 .sidebar-prompt-section > .el-dropdown { width: 100%; }
-.sidebar-prompt-trigger { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 9px; padding: 7px 9px; color: #3e4744; text-align: left; background: #ffffff; border: 1px solid #dfe3e1; border-radius: 9px; }
-.sidebar-prompt-trigger:hover { border-color: #a9c7bc; background: #f8fbfa; }
-.sidebar-prompt-trigger > span:nth-child(2) { min-width: 0; display: grid; flex: 1; }
-.sidebar-prompt-trigger small { color: #929a97; font-size: 9px; }
-.sidebar-prompt-trigger strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
-.sidebar-prompt-icon { width: 30px; height: 30px; display: grid; place-items: center; flex: 0 0 30px; color: #17785e; background: #e7f3ef; border-radius: 7px; }
-.sidebar-prompt-section .el-dropdown.is-disabled .sidebar-prompt-trigger { color: #8e9492; background: #f2f3f3; cursor: not-allowed; }
+.sidebar-prompt-trigger { width: 100%; height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: #515151; text-align: left; background: transparent; border: 0; border-radius: 7px; }
+.sidebar-prompt-trigger:hover { color: #242424; background: #e9e9ea; }
+.sidebar-prompt-trigger > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.sidebar-prompt-trigger > svg:last-child { color: #929292; }
+.sidebar-prompt-section .el-dropdown.is-disabled .sidebar-prompt-trigger { color: #9a9a9a; background: transparent; cursor: not-allowed; }
 
 .history-section { min-height: 0; flex: 1; margin-top: 19px; overflow-y: auto; scrollbar-width: thin; }
 .section-label { height: 30px; display: flex; align-items: center; justify-content: space-between; padding: 0 3px 0 10px; color: #8b8b8b; font-size: 12px; font-weight: 550; }
@@ -261,9 +259,15 @@ button:disabled { cursor: not-allowed; }
 .prompt-option { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .prompt-option strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 500; }
 .prompt-option small { color: #939b98; font-size: 9px; }
-.thinking-toggle { height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 8px; color: #59635f; background: #f5f7f6; border-radius: 8px; font-size: 10px; cursor: pointer; }
-.thinking-toggle:has(.el-switch.is-checked) { color: #176f56; background: #eaf5f1; }
-.thinking-toggle .el-switch { margin-left: 2px; }
+.composer-actions { display: flex; align-items: center; gap: 6px; }
+.thinking-menu-trigger { height: 30px; display: flex; align-items: center; gap: 5px; padding: 0 9px; color: #696969; background: transparent; border: 0; border-radius: 8px; font-size: 10px; }
+.thinking-menu-trigger:hover { color: #303030; background: #f0f0f0; }
+.thinking-menu-trigger.active { color: #3f5f55; background: #eeeeee; }
+.thinking-option { min-width: 150px; display: flex; align-items: center; gap: 9px; }
+.thinking-option > span { display: grid; line-height: 1.35; }
+.thinking-option strong { color: #393939; font-size: 11px; font-weight: 550; }
+.thinking-option small { color: #969696; font-size: 9px; }
+.el-dropdown-menu__item.selected { background: #f0f0f0; }
 .template-manager-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 20px; background: rgba(24, 29, 27, .42); }
 .template-manager { width: min(100%, 760px); max-height: calc(100vh - 40px); overflow: hidden; background: #fff; border-radius: 11px; box-shadow: 0 22px 65px rgba(0,0,0,.2); }
 .template-manager > header { display: flex; align-items: center; justify-content: space-between; padding: 19px 21px; border-bottom: 1px solid #e7e8e8; }.template-manager h2, .template-manager h3 { margin: 0; color: #303432; }.template-manager h2 { font-size: 16px; }.template-manager header p { margin: 5px 0 0; color: #8a918e; font-size: 11px; }.template-manager header > button { width: 30px; height: 30px; color: #777; background: transparent; border: 0; font-size: 20px; }

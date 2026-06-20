@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import DOMPurify from 'dompurify'
-import { ElOption, ElProgress, ElSelect, ElTag } from 'element-plus'
+import {
+  ElDropdown, ElDropdownItem, ElDropdownMenu, ElOption, ElProgress, ElSelect, ElSwitch, ElTag,
+} from 'element-plus'
 import { marked } from 'marked'
 import AdminDashboard from './AdminDashboard.vue'
 import { groupConversations, type ConversationSummary } from './conversationHistory'
 import { assessFileCompatibility } from './fileCompatibility'
 import {
   Archive,
+  ArrowDown,
   Bot,
+  BrainCircuit,
   Check,
+  ChevronDown,
   Copy,
   Database,
   Download,
@@ -148,6 +153,8 @@ const templateForm = ref({ name: '', description: '', systemPrompt: '' })
 const fileInput = ref<HTMLInputElement | null>(null)
 const attachments = ref<UploadedFile[]>([])
 const uploadingFile = ref(false)
+const thinkingEnabled = ref(false)
+const followLatest = ref(true)
 let abortController: AbortController | null = null
 
 // Configure GitHub-flavored Markdown once; every rendered result is sanitized below.
@@ -159,10 +166,19 @@ const selectedModelName = computed(() => {
 const selectedModelCapabilities = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.capabilities ?? []
 })
+const selectedTemplateName = computed(() => {
+  return promptTemplates.value.find((template) => template.id === selectedTemplateId.value)?.name
+    ?? '默认提示词'
+})
 
 const conversationGroups = computed(() => {
   return groupConversations(conversations.value, historySearch.value)
 })
+
+/** Applies a sidebar prompt choice; an empty command always means the platform default. */
+const selectPromptTemplate = (command: string | number | object) => {
+  selectedTemplateId.value = String(command)
+}
 
 /** Expands or collapses sidebar search and resets filtering when it closes. */
 const toggleHistorySearch = async () => {
@@ -324,13 +340,15 @@ const scheduleTitleRefresh = () => {
 }
 
 /** Restores an existing conversation and its last reported token usage. */
-const openConversation = async (conversation: ConversationSummary) => {
+const openConversation = async (conversation: ConversationSummary, forceBottom = true) => {
   if (isGenerating.value) return
+  const previousScrollTop = conversationArea.value?.scrollTop ?? 0
   const response = await fetch(`/api/conversations/${conversation.id}/messages`)
   if (!response.ok) return
   const persisted: PersistedMessage[] = await response.json()
   conversationId.value = conversation.id
   selectedModel.value = conversation.model
+  selectedTemplateId.value = ''
   messages.value = persisted
     .filter((message): message is PersistedMessage & { role: Role } =>
       Boolean(message.content) && message.role !== 'system')
@@ -351,7 +369,13 @@ const openConversation = async (conversation: ConversationSummary) => {
       }
     : { prompt: 0, completion: 0, total: 0 }
   sidebarOpen.value = false
-  await scrollToBottom()
+  if (forceBottom) {
+    followLatest.value = true
+    await scrollToBottom(true)
+  } else {
+    await nextTick()
+    if (conversationArea.value) conversationArea.value.scrollTop = previousScrollTop
+  }
 }
 
 /** Enters inline title-edit mode for one sidebar conversation. */
@@ -446,12 +470,26 @@ const deleteConversation = async (conversation: ConversationSummary) => {
   await loadConversations()
 }
 
-/** Keeps the newest streamed content visible without moving the whole document viewport. */
-const scrollToBottom = async () => {
+/** Tracks whether the reader is close enough to the bottom to resume automatic following. */
+const handleConversationScroll = () => {
+  const area = conversationArea.value
+  if (!area) return
+  followLatest.value = area.scrollHeight - area.scrollTop - area.clientHeight < 80
+}
+
+/** Keeps newest content visible only while the reader has not intentionally scrolled upward. */
+const scrollToBottom = async (force = false) => {
+  if (!force && !followLatest.value) return
   await nextTick()
   if (conversationArea.value) {
     conversationArea.value.scrollTop = conversationArea.value.scrollHeight
   }
+}
+
+/** Restores live following after the reader explicitly asks to return to the newest output. */
+const jumpToLatest = async () => {
+  followLatest.value = true
+  await scrollToBottom(true)
 }
 
 /** Applies one normalized SSE event to reactive message, metadata, or usage state. */
@@ -521,7 +559,8 @@ const sendPrompt = async (preset?: string) => {
   usage.value = { prompt: 0, completion: 0, total: 0 }
   isGenerating.value = true
   abortController = new AbortController()
-  await scrollToBottom()
+  followLatest.value = true
+  await scrollToBottom(true)
 
   try {
     const response = await fetch('/api/chat/stream', {
@@ -533,6 +572,7 @@ const sendPrompt = async (preset?: string) => {
         content,
         templateId: isFirstMessage && selectedTemplateId.value ? selectedTemplateId.value : null,
         attachmentIds,
+        thinkingEnabled: thinkingEnabled.value,
       }),
       signal: abortController.signal,
     })
@@ -557,7 +597,7 @@ const sendPrompt = async (preset?: string) => {
     abortController = null
     await loadConversations()
     const current = conversations.value.find((conversation) => conversation.id === conversationId.value)
-    if (current) await openConversation(current)
+    if (current) await openConversation(current, followLatest.value)
     if (isFirstMessage) scheduleTitleRefresh()
     await scrollToBottom()
   }
@@ -575,6 +615,8 @@ const newConversation = () => {
   nextTick(resizeComposer)
   usage.value = { prompt: 0, completion: 0, total: 0 }
   selectedTemplateId.value = ''
+  thinkingEnabled.value = false
+  followLatest.value = true
   attachments.value = []
 }
 
@@ -637,6 +679,26 @@ onMounted(() => {
         <a class="nav-item" href="#"><Users :size="18" />团队空间</a>
         <a class="nav-item" href="#"><Archive :size="18" />智能应用</a>
       </nav>
+
+      <!-- Prompt selection belongs to workspace navigation and applies only to a new conversation. -->
+      <section class="sidebar-prompt-section">
+        <div class="section-label"><span>提示词设置</span><button class="icon-button" type="button" title="管理提示词" @click="templateManagerOpen = true"><Settings :size="15" /></button></div>
+        <ElDropdown trigger="click" :disabled="messages.length > 0" @command="selectPromptTemplate">
+          <button class="sidebar-prompt-trigger" type="button">
+            <span class="sidebar-prompt-icon"><Settings :size="16" /></span>
+            <span><small>当前提示词</small><strong>{{ selectedTemplateName }}</strong></span>
+            <ChevronDown :size="15" />
+          </button>
+          <template #dropdown>
+            <ElDropdownMenu>
+              <ElDropdownItem command=""><span class="prompt-option"><strong>默认提示词</strong><small>通用</small></span></ElDropdownItem>
+              <ElDropdownItem v-for="template in promptTemplates" :key="template.id" :command="template.id">
+                <span class="prompt-option"><strong>{{ template.name }}</strong><ElTag :type="template.scope === 'system' ? 'info' : 'success'" effect="plain" size="small">{{ template.scope === 'system' ? '系统' : '个人' }}</ElTag></span>
+              </ElDropdownItem>
+            </ElDropdownMenu>
+          </template>
+        </ElDropdown>
+      </section>
 
       <div class="history-section">
         <!-- Persisted conversations support search, grouping, selection, rename, and soft deletion. -->
@@ -749,7 +811,7 @@ onMounted(() => {
         </div>
       </header>
 
-      <div ref="conversationArea" class="conversation-area" :class="{ 'has-messages': messages.length }">
+      <div ref="conversationArea" class="conversation-area" :class="{ 'has-messages': messages.length }" @scroll="handleConversationScroll">
         <!-- Empty-state suggestions are real prompts, not decorative cards. -->
         <div v-if="!messages.length" class="empty-state">
           <div class="empty-icon"><Bot :size="24" /></div>
@@ -793,6 +855,7 @@ onMounted(() => {
             </div>
           </article>
         </div>
+        <button v-if="messages.length && !followLatest" class="jump-to-latest" type="button" @click="jumpToLatest"><ArrowDown :size="15" />回到最新回复</button>
       </div>
 
       <footer class="composer-wrap">
@@ -821,19 +884,11 @@ onMounted(() => {
           ></textarea>
           <div class="composer-toolbar">
             <div class="input-tools">
-              <ElSelect
-                v-model="selectedTemplateId"
-                class="template-select"
-                :disabled="messages.length > 0"
-                popper-class="prompt-template-popper"
-                title="提示词模板"
-              >
-                <ElOption label="默认提示词" value=""><span class="prompt-option"><strong>默认提示词</strong><small>通用</small></span></ElOption>
-                <ElOption v-for="template in promptTemplates" :key="template.id" :label="template.name" :value="template.id">
-                  <span class="prompt-option"><strong>{{ template.name }}</strong><ElTag :type="template.scope === 'system' ? 'info' : 'success'" effect="plain" size="small">{{ template.scope === 'system' ? '系统' : '个人' }}</ElTag></span>
-                </ElOption>
-              </ElSelect>
-              <button class="icon-button" type="button" title="管理个人提示词模板" @click="templateManagerOpen = true"><Settings :size="17" /></button>
+              <label class="thinking-toggle" title="控制兼容模型是否启用推理思考模式">
+                <BrainCircuit :size="16" />
+                <span>思考模式</span>
+                <ElSwitch v-model="thinkingEnabled" size="small" inline-prompt active-text="开" inactive-text="关" />
+              </label>
               <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
               <button class="icon-button" type="button" title="上传文件或图片" :disabled="uploadingFile" @click="fileInput?.click()"><Paperclip :size="19" /></button>
               <button class="icon-button" title="语音输入" disabled><Mic :size="19" /></button>

@@ -29,6 +29,7 @@ async def test_chat_gateway_translates_openai_stream():
         """Act as a deterministic DeepSeek-compatible streaming endpoint."""
         assert request.headers["Authorization"] == "Bearer test-key"
         assert request.url.path == "/chat/completions"
+        assert json.loads(request.content)["enable_thinking"] is True
         return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
 
     settings = Settings(deepseek_api_key=SecretStr("test-key"))
@@ -44,6 +45,7 @@ async def test_chat_gateway_translates_openai_stream():
     chat_request = ChatRequest(
         model="deepseek-chat",
         messages=[ChatMessage(role="user", content="你好")],
+        thinking_enabled=True,
     )
 
     events = [event async for event in gateway.stream(chat_request, model)]

@@ -77,7 +77,7 @@ public class ChatService {
         );
         streamAssistant(
                 userId, conversationId, assistantMessageId, request.model(), newConversation,
-                newConversation ? request.content() : null, output
+                newConversation ? request.content() : null, request.thinkingEnabled(), output
         );
     }
 
@@ -96,7 +96,7 @@ public class ChatService {
             return;
         }
         UUID replacementId = repository.appendMessage(conversationId, "assistant", "", "generating");
-        streamAssistant(userId, conversationId, replacementId, model, false, null, output);
+        streamAssistant(userId, conversationId, replacementId, model, false, null, false, output);
     }
 
     /** Runs the shared generation lifecycle for new turns and regenerated answers. */
@@ -107,6 +107,7 @@ public class ChatService {
             String model,
             boolean newConversation,
             String firstPrompt,
+            boolean thinkingEnabled,
             OutputStream output
     ) throws IOException {
         writeEvent(output, Map.of(
@@ -123,6 +124,7 @@ public class ChatService {
             aiServiceClient.streamChat(
                     model,
                     buildModelMessages(conversationId),
+                    thinkingEnabled,
                     event -> handleAiEvent(event, output, assistantContent, inputTokens, outputTokens, firstTokenAt)
             );
             int durationMs = elapsedMs(startedAt);

@@ -117,9 +117,16 @@ public class AiServiceClient {
      * Sends an OpenAI-compatible conversation and forwards each normalized SSE event as it arrives.
      * The response is consumed inside the exchange callback so the underlying connection stays open.
      */
-    public void streamChat(String model, List<? extends Map<String, ?>> messages, EventConsumer consumer)
+    public void streamChat(
+            String model,
+            List<? extends Map<String, ?>> messages,
+            boolean thinkingEnabled,
+            EventConsumer consumer
+    )
             throws IOException {
-        Map<String, Object> payload = Map.of("model", model, "messages", messages);
+        Map<String, Object> payload = Map.of(
+                "model", model, "messages", messages, "thinking_enabled", thinkingEnabled
+        );
         restClient.post()
                 .uri("/v1/chat/stream")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -155,7 +162,7 @@ public class AiServiceClient {
         StringBuilder title = new StringBuilder();
         AtomicInteger inputTokens = new AtomicInteger();
         AtomicInteger outputTokens = new AtomicInteger();
-        streamChat(model, messages, event -> {
+        streamChat(model, messages, false, event -> {
             switch (event.path("type").asText()) {
                 case "delta" -> title.append(event.path("content").asText());
                 case "usage" -> {

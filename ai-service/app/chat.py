@@ -74,6 +74,8 @@ class ChatGateway:
             "temperature": request.temperature,
             "stream": True,
             "stream_options": {"include_usage": True},
+            # Compatible reasoning models commonly expose this raw OpenAI extension.
+            "enable_thinking": request.thinking_enabled,
         }
         if request.max_tokens is not None:
             payload["max_tokens"] = request.max_tokens

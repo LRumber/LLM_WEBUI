@@ -120,6 +120,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=100)
     temperature: float = Field(default=0.7, ge=0, le=2)
     max_tokens: int | None = Field(default=None, gt=0, le=32_768)
+    thinking_enabled: bool = False
 
 
 class TokenUsage(BaseModel):

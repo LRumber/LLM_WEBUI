@@ -13,12 +13,14 @@ import java.util.List;
  * @param content current user message
  * @param templateId optional system prompt template used when creating a conversation
  * @param attachmentIds user-owned files linked to the persisted user message
+ * @param thinkingEnabled whether the compatible model should expose its reasoning mode
  */
 public record ChatStreamRequest(
         UUID conversationId,
         @NotBlank String model,
         @NotBlank @Size(max = 100_000) String content,
         UUID templateId,
-        @Size(max = 20) List<UUID> attachmentIds
+        @Size(max = 20) List<UUID> attachmentIds,
+        boolean thinkingEnabled
 ) {
 }

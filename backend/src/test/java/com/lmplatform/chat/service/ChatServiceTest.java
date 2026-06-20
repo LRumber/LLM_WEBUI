@@ -51,7 +51,7 @@ class ChatServiceTest {
                 .thenReturn(List.of(new ModelContextMessage("user", "你好", List.of())));
 
         doAnswer(invocation -> {
-            AiServiceClient.EventConsumer consumer = invocation.getArgument(2);
+            AiServiceClient.EventConsumer consumer = invocation.getArgument(3);
             consumer.accept(objectMapper.readTree("{\"type\":\"delta\",\"content\":\"你\"}"));
             consumer.accept(objectMapper.readTree("{\"type\":\"delta\",\"content\":\"好\"}"));
             consumer.accept(objectMapper.readTree("""
@@ -59,10 +59,10 @@ class ChatServiceTest {
                     """));
             consumer.accept(objectMapper.readTree("{\"type\":\"done\"}"));
             return null;
-        }).when(client).streamChat(eq("deepseek-chat"), any(), any());
+        }).when(client).streamChat(eq("deepseek-chat"), any(), eq(true), any());
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        service.stream(new ChatStreamRequest(null, "deepseek-chat", "你好", null, List.of()), output);
+        service.stream(new ChatStreamRequest(null, "deepseek-chat", "你好", null, List.of(), true), output);
 
         String stream = output.toString(StandardCharsets.UTF_8);
         assertThat(stream).contains("metadata", conversationId.toString(), "\"content\":\"你\"");
@@ -98,11 +98,11 @@ class ChatServiceTest {
         when(repository.modelContextMessages(conversationId, 40))
                 .thenReturn(List.of(new ModelContextMessage("user", "你好", List.of())));
         doAnswer(invocation -> {
-            AiServiceClient.EventConsumer consumer = invocation.getArgument(2);
+            AiServiceClient.EventConsumer consumer = invocation.getArgument(3);
             consumer.accept(objectMapper.readTree("{\"type\":\"delta\",\"content\":\"新回答\"}"));
             consumer.accept(objectMapper.readTree("{\"type\":\"done\"}"));
             return null;
-        }).when(client).streamChat(eq("deepseek-chat"), any(), any());
+        }).when(client).streamChat(eq("deepseek-chat"), any(), eq(false), any());
 
         service.regenerate(
                 conversationId, oldAssistantId, "deepseek-chat", new ByteArrayOutputStream()

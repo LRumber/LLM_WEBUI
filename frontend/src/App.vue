@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import DOMPurify from 'dompurify'
-import { ElOption, ElSelect } from 'element-plus'
+import { ElOption, ElProgress, ElSelect, ElTag } from 'element-plus'
 import { marked } from 'marked'
 import AdminDashboard from './AdminDashboard.vue'
 import { groupConversations, type ConversationSummary } from './conversationHistory'
@@ -89,6 +89,18 @@ interface UploadedFile {
   originalName: string
   mediaType: string
   status: 'uploaded' | 'processing' | 'ready' | 'failed'
+}
+
+/** Maps durable parser states to concise Element Plus status labels. */
+const attachmentStatusLabel = (status: UploadedFile['status']) => ({
+  uploaded: '等待解析', processing: '解析中', ready: '已接收', failed: '解析失败',
+}[status])
+
+/** Keeps attachment status colors consistent between the composer and sent messages. */
+const attachmentTagType = (status: UploadedFile['status']) => {
+  if (status === 'ready') return 'success'
+  if (status === 'failed') return 'danger'
+  return 'warning'
 }
 
 // Page and conversation state stays local; durable data always comes from Spring Boot.
@@ -741,10 +753,11 @@ onMounted(() => {
             <div class="message-column">
               <div class="message-body" :class="{ error: message.error }">
                 <div v-if="message.attachments?.length" class="message-attachments">
-                  <span v-for="file in message.attachments" :key="file.id" class="message-attachment">
-                    <Paperclip :size="14" />
-                    <span><strong>{{ file.originalName }}</strong><small>{{ file.status === 'ready' ? '已接收' : file.status }}</small></span>
-                  </span>
+                  <div v-for="file in message.attachments" :key="file.id" class="message-attachment">
+                    <span class="attachment-file-icon"><FileText :size="17" /></span>
+                    <span class="attachment-file-copy"><strong :title="file.originalName">{{ file.originalName }}</strong><small>{{ file.mediaType || '文件' }}</small></span>
+                    <ElTag :type="attachmentTagType(file.status)" effect="light" size="small" round>{{ attachmentStatusLabel(file.status) }}</ElTag>
+                  </div>
                 </div>
                 <div v-if="message.content && message.role === 'assistant'" class="markdown-body" v-html="renderMarkdown(message.content)"></div>
                 <p v-else-if="message.content">{{ message.content }}</p>
@@ -769,7 +782,16 @@ onMounted(() => {
         <!-- The composer owns file/voice placeholders, cancellation, and keyboard submission. -->
         <div class="composer">
           <div v-if="attachments.length" class="attachment-list">
-            <span v-for="file in attachments" :key="file.id"><Paperclip :size="12" />{{ file.originalName }}<i v-if="file.status !== 'ready'">{{ file.status === 'failed' ? '失败' : '处理中' }}</i><button type="button" title="移除附件" @click="attachments = attachments.filter((item) => item.id !== file.id)">×</button></span>
+            <div v-for="file in attachments" :key="file.id" class="composer-attachment">
+              <ElTag
+                :type="attachmentTagType(file.status)"
+                effect="plain"
+                closable
+                round
+                @close="attachments = attachments.filter((item) => item.id !== file.id)"
+              ><Paperclip :size="12" /><span :title="file.originalName">{{ file.originalName }}</span><small>{{ attachmentStatusLabel(file.status) }}</small></ElTag>
+              <ElProgress v-if="file.status === 'uploaded' || file.status === 'processing'" :percentage="100" :show-text="false" :stroke-width="2" status="warning" :indeterminate="true" :duration="1.5" />
+            </div>
           </div>
           <textarea
             ref="promptInput"

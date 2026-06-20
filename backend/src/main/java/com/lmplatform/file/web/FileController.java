@@ -2,10 +2,13 @@ package com.lmplatform.file.web;
 
 import com.lmplatform.chat.repository.ConversationRepository;
 import com.lmplatform.file.model.FileAsset;
+import com.lmplatform.file.model.DownloadedFile;
 import com.lmplatform.file.service.FileService;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.MediaType;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -45,6 +48,25 @@ public class FileController {
     @GetMapping
     public List<FileAsset> files() {
         return fileService.list(conversationRepository.ensureDevelopmentUser());
+    }
+
+    /** Streams an owned private object with a UTF-8 attachment filename. */
+    @GetMapping("/{fileId}/download")
+    public ResponseEntity<?> download(@PathVariable UUID fileId) {
+        try {
+            DownloadedFile file = fileService.download(
+                    conversationRepository.ensureDevelopmentUser(), fileId
+            );
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(file.mediaType()))
+                    .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                            .filename(file.filename(), java.nio.charset.StandardCharsets.UTF_8).build().toString())
+                    .body(file.content());
+        } catch (IllegalArgumentException exception) {
+            return ResponseEntity.badRequest().body(new UploadError(exception.getMessage()));
+        } catch (Exception exception) {
+            return ResponseEntity.internalServerError().body(new UploadError("File download failed"));
+        }
     }
 
     /** Retries a failed or interrupted parser task from the private object already stored in MinIO. */

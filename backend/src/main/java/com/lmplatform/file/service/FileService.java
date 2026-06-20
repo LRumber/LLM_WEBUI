@@ -2,6 +2,7 @@ package com.lmplatform.file.service;
 
 import com.lmplatform.file.config.ObjectStorageProperties;
 import com.lmplatform.file.model.FileAsset;
+import com.lmplatform.file.model.DownloadedFile;
 import com.lmplatform.file.repository.FileRepository;
 import java.security.MessageDigest;
 import java.util.HexFormat;
@@ -51,6 +52,16 @@ public class FileService {
 
     public List<FileAsset> list(long userId) {
         return repository.list(userId);
+    }
+
+    /** Reads an owned private object for an authenticated browser download. */
+    public DownloadedFile download(long userId, UUID fileId) throws Exception {
+        var stored = repository.findStored(fileId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("File not found"));
+        int limit = Math.toIntExact(Math.min(properties.maxFileBytes(), Integer.MAX_VALUE));
+        return new DownloadedFile(
+                stored.originalName(), stored.mediaType(), storage.get(stored.objectKey(), limit)
+        );
     }
 
     /** Reloads an existing private object and schedules parsing without requiring another upload. */

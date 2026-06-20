@@ -91,4 +91,26 @@ class FileServiceTest {
         verify(repository).requeue(fileId);
         verify(processor).process(fileId, "hello!".getBytes(), "guide.md", "text/markdown");
     }
+
+    /** Confirms downloads read only the object resolved through the owned-file repository lookup. */
+    @Test
+    void downloadsOwnedPrivateObject() throws Exception {
+        ObjectStorageService storage = mock(ObjectStorageService.class);
+        FileRepository repository = mock(FileRepository.class);
+        ObjectStorageProperties properties = new ObjectStorageProperties(
+                "http://localhost:9000", "user", "secret", "files", 1024
+        );
+        UUID fileId = UUID.randomUUID();
+        when(repository.findStored(fileId, 9L)).thenReturn(Optional.of(
+                new StoredFileAsset(fileId, "9/private/guide.md", "guide.md", "text/markdown")
+        ));
+        when(storage.get("9/private/guide.md", 1024)).thenReturn("hello!".getBytes());
+
+        var result = new FileService(
+                properties, storage, repository, mock(FileProcessingService.class)
+        ).download(9L, fileId);
+
+        assertThat(result.filename()).isEqualTo("guide.md");
+        assertThat(result.content()).isEqualTo("hello!".getBytes());
+    }
 }

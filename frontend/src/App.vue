@@ -12,6 +12,7 @@ import {
   Check,
   Copy,
   Database,
+  Download,
   FileText,
   GitBranch,
   Library,
@@ -101,6 +102,21 @@ const attachmentTagType = (status: UploadedFile['status']) => {
   if (status === 'ready') return 'success'
   if (status === 'failed') return 'danger'
   return 'warning'
+}
+
+/** Downloads an owned attachment through the backend without exposing MinIO credentials. */
+const downloadAttachment = async (file: UploadedFile) => {
+  const response = await fetch(`/api/files/${file.id}/download`)
+  if (!response.ok) {
+    window.alert('文件下载失败，请稍后重试。')
+    return
+  }
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = file.originalName
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 // Page and conversation state stays local; durable data always comes from Spring Boot.
@@ -753,11 +769,12 @@ onMounted(() => {
             <div class="message-column">
               <div class="message-body" :class="{ error: message.error }">
                 <div v-if="message.attachments?.length" class="message-attachments">
-                  <div v-for="file in message.attachments" :key="file.id" class="message-attachment">
+                  <button v-for="file in message.attachments" :key="file.id" class="message-attachment" type="button" title="点击下载文件" @click="downloadAttachment(file)">
                     <span class="attachment-file-icon"><FileText :size="17" /></span>
                     <span class="attachment-file-copy"><strong :title="file.originalName">{{ file.originalName }}</strong><small>{{ file.mediaType || '文件' }}</small></span>
                     <ElTag :type="attachmentTagType(file.status)" effect="light" size="small" round>{{ attachmentStatusLabel(file.status) }}</ElTag>
-                  </div>
+                    <Download class="attachment-download-icon" :size="15" />
+                  </button>
                 </div>
                 <div v-if="message.content && message.role === 'assistant'" class="markdown-body" v-html="renderMarkdown(message.content)"></div>
                 <p v-else-if="message.content">{{ message.content }}</p>
@@ -804,10 +821,18 @@ onMounted(() => {
           ></textarea>
           <div class="composer-toolbar">
             <div class="input-tools">
-              <select v-model="selectedTemplateId" class="template-select" :disabled="messages.length > 0" title="提示词模板">
-                <option value="">默认提示词</option>
-                <option v-for="template in promptTemplates" :key="template.id" :value="template.id">{{ template.name }}</option>
-              </select>
+              <ElSelect
+                v-model="selectedTemplateId"
+                class="template-select"
+                :disabled="messages.length > 0"
+                popper-class="prompt-template-popper"
+                title="提示词模板"
+              >
+                <ElOption label="默认提示词" value=""><span class="prompt-option"><strong>默认提示词</strong><small>通用</small></span></ElOption>
+                <ElOption v-for="template in promptTemplates" :key="template.id" :label="template.name" :value="template.id">
+                  <span class="prompt-option"><strong>{{ template.name }}</strong><ElTag :type="template.scope === 'system' ? 'info' : 'success'" effect="plain" size="small">{{ template.scope === 'system' ? '系统' : '个人' }}</ElTag></span>
+                </ElOption>
+              </ElSelect>
               <button class="icon-button" type="button" title="管理个人提示词模板" @click="templateManagerOpen = true"><Settings :size="17" /></button>
               <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
               <button class="icon-button" type="button" title="上传文件或图片" :disabled="uploadingFile" @click="fileInput?.click()"><Paperclip :size="19" /></button>

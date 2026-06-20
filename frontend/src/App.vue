@@ -12,7 +12,6 @@ import {
   Archive,
   ArrowDown,
   Bot,
-  BrainCircuit,
   Check,
   ChevronDown,
   Copy,
@@ -285,6 +284,7 @@ const editPromptTemplate = (template?: PromptTemplate) => {
 
 /** Creates or updates a personal template through ownership-filtered APIs. */
 const savePromptTemplate = async () => {
+  const templateIdBeforeSave = editingTemplateId.value
   const payload = { ...templateForm.value, enabled: true }
   const response = await fetch(
     editingTemplateId.value ? `/api/prompt-templates/${editingTemplateId.value}` : '/api/prompt-templates',
@@ -294,9 +294,17 @@ const savePromptTemplate = async () => {
       body: JSON.stringify(payload),
     },
   )
-  if (!response.ok) return
+  if (!response.ok) {
+    const error = await response.json().catch(() => null)
+    window.alert(error?.message || '提示词模板保存失败，请检查名称和内容。')
+    return
+  }
+  const created: PromptTemplate | null = templateIdBeforeSave ? null : await response.json()
   await loadPromptTemplates()
+  selectedTemplateId.value = created?.id ?? templateIdBeforeSave ?? ''
   editPromptTemplate()
+  templateManagerOpen.value = false
+  if (messages.value.length) window.alert('模板已保存，将在下一次新建对话时生效。')
 }
 
 /** Disables an owned personal template after confirmation, preserving historical references. */
@@ -619,7 +627,6 @@ const newConversation = () => {
   prompt.value = ''
   nextTick(resizeComposer)
   usage.value = { prompt: 0, completion: 0, total: 0 }
-  selectedTemplateId.value = ''
   thinkingEnabled.value = false
   followLatest.value = true
   attachments.value = []
@@ -897,12 +904,12 @@ onMounted(() => {
             <div class="composer-actions">
               <ElDropdown trigger="click" placement="top-end" @command="selectThinkingMode">
                 <button class="thinking-menu-trigger" :class="{ active: thinkingEnabled }" type="button" title="选择回答模式">
-                  <BrainCircuit :size="15" /><span>{{ thinkingEnabled ? '深度思考' : '快速回答' }}</span><ChevronDown :size="13" />
+                  <span>{{ thinkingEnabled ? '深度思考' : '快速回答' }}</span><ChevronDown :size="13" />
                 </button>
                 <template #dropdown>
                   <ElDropdownMenu>
-                    <ElDropdownItem command="fast" :class="{ selected: !thinkingEnabled }"><span class="thinking-option"><Bot :size="15" /><span><strong>快速回答</strong><small>直接生成答案</small></span></span></ElDropdownItem>
-                    <ElDropdownItem command="thinking" :class="{ selected: thinkingEnabled }"><span class="thinking-option"><BrainCircuit :size="15" /><span><strong>深度思考</strong><small>启用模型推理</small></span></span></ElDropdownItem>
+                    <ElDropdownItem command="fast" :class="{ selected: !thinkingEnabled }"><span class="thinking-option"><span><strong>快速回答</strong><small>直接生成答案</small></span></span></ElDropdownItem>
+                    <ElDropdownItem command="thinking" :class="{ selected: thinkingEnabled }"><span class="thinking-option"><span><strong>深度思考</strong><small>启用模型推理</small></span></span></ElDropdownItem>
                   </ElDropdownMenu>
                 </template>
               </ElDropdown>

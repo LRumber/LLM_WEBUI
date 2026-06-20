@@ -23,7 +23,8 @@ public class FileProcessingService {
         repository.markProcessing(fileId);
         try {
             repository.complete(fileId, aiServiceClient.parseDocument(content, filename, mediaType));
-        } catch (Exception exception) {
+        } catch (Exception | LinkageError exception) {
+            // Linkage errors must also finish the durable task instead of leaving it stuck in processing.
             String message = exception.getMessage() == null ? "Document parsing failed" : exception.getMessage();
             repository.fail(fileId, message.substring(0, Math.min(message.length(), 1000)));
         }

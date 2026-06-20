@@ -470,6 +470,10 @@ const consumeEventStream = async (response: Response, assistantIndex: number) =>
 const sendPrompt = async (preset?: string) => {
   const content = (preset ?? prompt.value).trim()
   if (!content || isGenerating.value) return
+  if (attachments.value.some((file) => file.status !== 'ready')) {
+    window.alert('请等待附件解析完成后再发送。')
+    return
+  }
   const isFirstMessage = conversationId.value === null
 
   const userMessage: ChatMessage = { role: 'user', content }

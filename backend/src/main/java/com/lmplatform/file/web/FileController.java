@@ -4,10 +4,12 @@ import com.lmplatform.chat.repository.ConversationRepository;
 import com.lmplatform.file.model.FileAsset;
 import com.lmplatform.file.service.FileService;
 import java.util.List;
+import java.util.UUID;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -43,6 +45,19 @@ public class FileController {
     @GetMapping
     public List<FileAsset> files() {
         return fileService.list(conversationRepository.ensureDevelopmentUser());
+    }
+
+    /** Retries a failed or interrupted parser task from the private object already stored in MinIO. */
+    @PostMapping("/{fileId}/retry")
+    public ResponseEntity<?> retry(@PathVariable UUID fileId) {
+        try {
+            long userId = conversationRepository.ensureDevelopmentUser();
+            return ResponseEntity.accepted().body(fileService.retry(userId, fileId));
+        } catch (IllegalArgumentException exception) {
+            return ResponseEntity.badRequest().body(new UploadError(exception.getMessage()));
+        } catch (Exception exception) {
+            return ResponseEntity.internalServerError().body(new UploadError("File retry failed"));
+        }
     }
 
     private record UploadError(String message) {

@@ -2,8 +2,10 @@ package com.lmplatform.file.repository;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.lmplatform.file.model.FileAsset;
+import com.lmplatform.file.model.StoredFileAsset;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -81,5 +83,30 @@ public class FileRepository {
                 rs.getString("asset_kind"), rs.getString("status"),
                 rs.getString("error_message"), rs.getObject("created_at", OffsetDateTime.class)
         ), userId);
+    }
+
+    /** Resolves an owned private object without exposing its object key through the HTTP API. */
+    public Optional<StoredFileAsset> findStored(UUID fileId, long userId) {
+        return jdbc.query("""
+                SELECT id, object_key, original_name, media_type FROM file_asset
+                WHERE id = ? AND owner_user_id = ?
+                """, (rs, rowNum) -> new StoredFileAsset(
+                rs.getObject("id", UUID.class), rs.getString("object_key"),
+                rs.getString("original_name"), rs.getString("media_type")
+        ), fileId, userId).stream().findFirst();
+    }
+
+    /** Returns a failed or interrupted task to the queue before an explicit retry. */
+    @Transactional
+    public void requeue(UUID fileId) {
+        jdbc.update("""
+                UPDATE file_asset SET status = 'uploaded', error_message = NULL,
+                    updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                """, fileId);
+        jdbc.update("""
+                UPDATE processing_task SET status = 'queued', error_message = NULL,
+                    available_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL
+                WHERE resource_id = ? AND status <> 'completed'
+                """, fileId);
     }
 }

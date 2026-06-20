@@ -53,6 +53,18 @@ public class FileService {
         return repository.list(userId);
     }
 
+    /** Reloads an existing private object and schedules parsing without requiring another upload. */
+    public FileAsset retry(long userId, UUID fileId) throws Exception {
+        var stored = repository.findStored(fileId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("File not found"));
+        int limit = Math.toIntExact(Math.min(properties.maxFileBytes(), Integer.MAX_VALUE));
+        byte[] content = storage.get(stored.objectKey(), limit);
+        repository.requeue(fileId);
+        processingService.process(fileId, content, stored.originalName(), stored.mediaType());
+        return repository.list(userId).stream().filter(item -> item.id().equals(fileId)).findFirst()
+                .orElseThrow();
+    }
+
     private String sanitizeFilename(String value) {
         String name = value == null ? "upload.bin" : value.replace('\\', '/');
         name = name.substring(name.lastIndexOf('/') + 1).replaceAll("[\\p{Cntrl}]", "").strip();

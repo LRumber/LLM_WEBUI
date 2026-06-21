@@ -186,12 +186,14 @@ public class KnowledgeBaseRepository {
     public void replaceChunks(
             UUID documentId, List<KnowledgeChunk> chunks, List<float[]> vectors, String model
     ) {
-        if (chunks.size() != vectors.size()) throw new IllegalArgumentException("Chunk/vector count mismatch");
+        if (!vectors.isEmpty() && chunks.size() != vectors.size()) {
+            throw new IllegalArgumentException("Chunk/vector count mismatch");
+        }
         jdbc.update("DELETE FROM document_chunk WHERE document_id = ?", documentId);
         for (int index = 0; index < chunks.size(); index++) {
             KnowledgeChunk chunk = chunks.get(index);
-            Float[] boxed = new Float[vectors.get(index).length];
-            for (int vectorIndex = 0; vectorIndex < boxed.length; vectorIndex++) {
+            Float[] boxed = vectors.isEmpty() ? null : new Float[vectors.get(index).length];
+            for (int vectorIndex = 0; boxed != null && vectorIndex < boxed.length; vectorIndex++) {
                 boxed[vectorIndex] = vectors.get(index)[vectorIndex];
             }
             jdbc.update("""
@@ -205,7 +207,11 @@ public class KnowledgeBaseRepository {
                 statement.setInt(3, chunk.index());
                 statement.setString(4, chunk.content());
                 statement.setInt(5, chunk.tokenCount());
-                statement.setArray(6, statement.getConnection().createArrayOf("real", boxed));
+                if (boxed == null) {
+                    statement.setNull(6, java.sql.Types.ARRAY);
+                } else {
+                    statement.setArray(6, statement.getConnection().createArrayOf("real", boxed));
+                }
                 statement.setString(7, model);
             });
         }

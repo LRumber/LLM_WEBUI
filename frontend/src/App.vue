@@ -53,6 +53,23 @@ interface ChatMessage {
   reasoningContent?: string
   reasoningDurationMs?: number | null
   reasoningExpanded?: boolean
+  citations?: MessageCitation[]
+}
+
+interface MessageCitation {
+  number?: number
+  chunkId?: string
+  fileId: string
+  filename: string
+  pageNumber?: number | null
+  titlePath?: string | null
+  content: string
+  score: number
+}
+
+interface KnowledgeBaseOption {
+  id: string
+  name: string
 }
 
 /** Model registration exposed through the Java proxy. */
@@ -64,7 +81,7 @@ interface ModelInfo {
 
 /** Normalized event emitted by Spring Boot while forwarding an AI response. */
 interface StreamEvent {
-  type: 'metadata' | 'reasoning_delta' | 'reasoning_done' | 'delta' | 'usage' | 'done' | 'error'
+  type: 'metadata' | 'citations' | 'reasoning_delta' | 'reasoning_done' | 'delta' | 'usage' | 'done' | 'error'
   content?: string
   message?: string
   conversation_id?: string
@@ -73,6 +90,7 @@ interface StreamEvent {
   completion_tokens?: number
   total_tokens?: number
   duration_ms?: number
+  citations?: MessageCitation[]
 }
 
 /** Persisted message returned when restoring an existing conversation. */
@@ -87,6 +105,7 @@ interface PersistedMessage {
   attachments?: UploadedFile[]
   reasoningContent?: string | null
   reasoningDurationMs?: number | null
+  citations?: MessageCitation[]
 }
 
 interface PromptTemplate {
@@ -138,6 +157,18 @@ const downloadAttachment = async (file: UploadedFile) => {
   URL.revokeObjectURL(url)
 }
 
+/** Downloads a cited private source through the same owned-file backend boundary. */
+const downloadCitation = async (citation: MessageCitation) => {
+  const response = await fetch(`/api/files/${citation.fileId}/download`)
+  if (!response.ok) return window.alert('引用文件下载失败')
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = citation.filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
 // Page and conversation state stays local; durable data always comes from Spring Boot.
 const isKnowledge = computed(() => window.location.pathname.startsWith('/app/knowledge'))
 const isWorkspace = computed(() => window.location.pathname.startsWith('/app') && !isKnowledge.value)
@@ -161,6 +192,8 @@ const historySearch = ref('')
 const historySearchOpen = ref(false)
 const historySearchInput = ref<HTMLInputElement | null>(null)
 const promptTemplates = ref<PromptTemplate[]>([])
+const knowledgeBases = ref<KnowledgeBaseOption[]>([])
+const selectedKnowledgeBaseIds = ref<string[]>([])
 const selectedTemplateId = ref('')
 const templateManagerOpen = ref(false)
 const editingTemplateId = ref<string | null>(null)
@@ -187,6 +220,15 @@ const selectedTemplateName = computed(() => {
   return promptTemplates.value.find((template) => template.id === selectedTemplateId.value)?.name
     ?? '默认提示词'
 })
+const selectedKnowledgeBaseNames = computed(() => {
+  if (conversationId.value) {
+    return conversations.value.find((item) => item.id === conversationId.value)?.knowledgeBaseNames ?? ''
+  }
+  return knowledgeBases.value
+    .filter((item) => selectedKnowledgeBaseIds.value.includes(item.id))
+    .map((item) => item.name)
+    .join('、')
+})
 
 const conversationGroups = computed(() => {
   return groupConversations(conversations.value, historySearch.value)
@@ -205,6 +247,19 @@ const selectPromptTemplate = (command: string | number | object) => {
 /** Converts the compact composer dropdown choice into the model request flag. */
 const selectThinkingMode = (command: string | number | object) => {
   thinkingEnabled.value = String(command) === 'thinking'
+}
+
+/** Toggles knowledge spaces only before the first message locks the conversation snapshot. */
+const selectKnowledgeBase = (command: string | number | object) => {
+  if (conversationId.value) return
+  const id = String(command)
+  if (id === '__clear__') {
+    selectedKnowledgeBaseIds.value = []
+    return
+  }
+  selectedKnowledgeBaseIds.value = selectedKnowledgeBaseIds.value.includes(id)
+    ? selectedKnowledgeBaseIds.value.filter((item) => item !== id)
+    : [...selectedKnowledgeBaseIds.value, id]
 }
 
 /** Expands or collapses sidebar search and resets filtering when it closes. */
@@ -278,6 +333,16 @@ const loadPromptTemplates = async () => {
     if (response.ok) promptTemplates.value = await response.json()
   } catch {
     promptTemplates.value = []
+  }
+}
+
+/** Loads only knowledge spaces visible to the current user for new-conversation selection. */
+const loadKnowledgeBases = async () => {
+  try {
+    const response = await fetch('/api/knowledge-bases')
+    if (response.ok) knowledgeBases.value = await response.json()
+  } catch {
+    knowledgeBases.value = []
   }
 }
 
@@ -398,6 +463,7 @@ const openConversation = async (conversation: ConversationSummary, forceBottom =
       reasoningContent: message.reasoningContent ?? '',
       reasoningDurationMs: message.reasoningDurationMs,
       reasoningExpanded: false,
+      citations: message.citations ?? [],
     }))
   const lastAssistant = [...persisted].reverse().find((message) => message.role === 'assistant')
   usage.value = lastAssistant
@@ -537,7 +603,9 @@ const applyStreamEvent = (event: StreamEvent, assistantIndex: number) => {
   if (event.type === 'metadata' && event.conversation_id) {
     conversationId.value = event.conversation_id
   }
-  if (event.type === 'reasoning_delta' && event.content) {
+  if (event.type === 'citations') {
+    assistant.citations = event.citations ?? []
+  } else if (event.type === 'reasoning_delta' && event.content) {
     assistant.reasoningContent = (assistant.reasoningContent ?? '') + event.content
     scrollToBottom()
   } else if (event.type === 'reasoning_done') {
@@ -594,7 +662,7 @@ const sendPrompt = async (preset?: string) => {
 
   const userMessage: ChatMessage = { role: 'user', content, attachments: sentAttachments }
   const assistantMessage: ChatMessage = {
-    role: 'assistant', content: '', reasoningContent: '', reasoningExpanded: false,
+    role: 'assistant', content: '', reasoningContent: '', reasoningExpanded: false, citations: [],
   }
   messages.value.push(userMessage, assistantMessage)
   const assistantIndex = messages.value.length - 1
@@ -618,6 +686,7 @@ const sendPrompt = async (preset?: string) => {
         content,
         templateId: isFirstMessage && selectedTemplateId.value ? selectedTemplateId.value : null,
         attachmentIds,
+        knowledgeBaseIds: isFirstMessage ? selectedKnowledgeBaseIds.value : [],
         thinkingEnabled: thinkingEnabled.value,
       }),
       signal: abortController.signal,
@@ -663,6 +732,7 @@ const newConversation = () => {
   thinkingEnabled.value = false
   followLatest.value = true
   attachments.value = []
+  selectedKnowledgeBaseIds.value = []
 }
 
 /** Implements Enter-to-send while preserving Shift+Enter for multiline input. */
@@ -679,6 +749,7 @@ onMounted(() => {
     loadModels()
     loadConversations()
     loadPromptTemplates()
+    loadKnowledgeBases()
   }
 })
 </script>
@@ -894,6 +965,14 @@ onMounted(() => {
                 <div v-if="message.content && message.role === 'assistant'" class="markdown-body" v-html="renderMarkdown(message.content)"></div>
                 <p v-else-if="message.content">{{ message.content }}</p>
                 <div v-else class="typing-indicator" aria-label="模型正在生成"><i></i><i></i><i></i></div>
+                <details v-if="message.role === 'assistant' && message.citations?.length" class="message-citations">
+                  <summary><Library :size="14" />引用来源（{{ message.citations.length }}）</summary>
+                  <button v-for="(citation, citationIndex) in message.citations" :key="citation.chunkId || citationIndex" type="button" @click="downloadCitation(citation)">
+                    <span>[{{ citation.number || citationIndex + 1 }}] {{ citation.filename }}<small v-if="citation.pageNumber">第 {{ citation.pageNumber }} 页</small></span>
+                    <p>{{ citation.content }}</p>
+                    <Download :size="14" />
+                  </button>
+                </details>
               </div>
               <div v-if="message.content" class="message-actions">
                 <button v-if="message.role === 'assistant'" class="message-action" type="button" title="复制回答" @click="copyMessage(message.content, index)">
@@ -940,7 +1019,20 @@ onMounted(() => {
               <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
               <button class="icon-button" type="button" title="上传文件或图片" :disabled="uploadingFile" @click="fileInput?.click()"><Paperclip :size="19" /></button>
               <button class="icon-button" title="语音输入" disabled><Mic :size="19" /></button>
-              <button class="knowledge-button" type="button" disabled><Library :size="16" />知识库</button>
+              <ElDropdown trigger="click" placement="top-start" @command="selectKnowledgeBase">
+                <button class="knowledge-button" :class="{ active: selectedKnowledgeBaseNames }" type="button" :title="selectedKnowledgeBaseNames || '选择知识库'">
+                  <Library :size="16" /><span>{{ selectedKnowledgeBaseNames || '知识库' }}</span><LockKeyhole v-if="conversationId" :size="12" /><ChevronDown v-else :size="12" />
+                </button>
+                <template #dropdown>
+                  <ElDropdownMenu>
+                    <ElDropdownItem v-for="knowledgeBase in knowledgeBases" :key="knowledgeBase.id" :command="knowledgeBase.id" :disabled="Boolean(conversationId)">
+                      <span class="knowledge-chat-option"><Check v-if="selectedKnowledgeBaseIds.includes(knowledgeBase.id)" :size="13" /><span v-else></span>{{ knowledgeBase.name }}</span>
+                    </ElDropdownItem>
+                    <ElDropdownItem v-if="selectedKnowledgeBaseIds.length && !conversationId" divided command="__clear__">清除选择</ElDropdownItem>
+                    <ElDropdownItem v-if="!knowledgeBases.length" disabled>暂无可用知识库</ElDropdownItem>
+                  </ElDropdownMenu>
+                </template>
+              </ElDropdown>
             </div>
             <div class="composer-actions">
               <ElDropdown trigger="click" placement="top-end" @command="selectThinkingMode">

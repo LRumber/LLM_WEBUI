@@ -12,6 +12,7 @@ public record ConversationSummary(
         String preview,
         UUID promptTemplateId,
         String promptTemplateName,
+        String knowledgeBaseNames,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt
 ) {

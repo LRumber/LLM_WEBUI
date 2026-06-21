@@ -17,6 +17,8 @@ import com.lmplatform.chat.model.ModelContextMessage;
 import com.lmplatform.chat.model.PromptTemplate;
 import com.lmplatform.chat.repository.ConversationRepository;
 import com.lmplatform.file.service.ObjectStorageService;
+import com.lmplatform.knowledge.service.KnowledgeBaseService;
+import com.lmplatform.knowledge.service.KnowledgeSearchService;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -33,16 +35,19 @@ class ChatServiceTest {
         ConversationRepository repository = mock(ConversationRepository.class);
         AiServiceClient client = mock(AiServiceClient.class);
         TitleGenerationService titleGenerationService = mock(TitleGenerationService.class);
+        KnowledgeBaseService knowledgeBaseService = mock(KnowledgeBaseService.class);
+        KnowledgeSearchService knowledgeSearchService = mock(KnowledgeSearchService.class);
         ObjectMapper objectMapper = new ObjectMapper();
         ChatService service = new ChatService(
                 repository, client, objectMapper, titleGenerationService,
                 new AiServiceProperties("http://localhost:8001", 150, "deepseek-chat", 40),
-                mock(ObjectStorageService.class)
+                mock(ObjectStorageService.class), knowledgeBaseService, knowledgeSearchService
         );
         UUID conversationId = UUID.randomUUID();
         UUID userMessageId = UUID.randomUUID();
         UUID assistantMessageId = UUID.randomUUID();
         UUID templateId = UUID.randomUUID();
+        UUID knowledgeBaseId = UUID.randomUUID();
 
         when(repository.ensureDevelopmentUser()).thenReturn(1L);
         when(repository.findPromptTemplate(templateId, 1L)).thenReturn(Optional.of(
@@ -73,7 +78,7 @@ class ChatServiceTest {
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         service.stream(new ChatStreamRequest(
-                null, "deepseek-chat", "你好", templateId, List.of(), true
+                null, "deepseek-chat", "你好", templateId, List.of(), List.of(knowledgeBaseId), true
         ), output);
 
         String stream = output.toString(StandardCharsets.UTF_8);
@@ -87,6 +92,8 @@ class ChatServiceTest {
                 eq("先分析"), anyInt(), eq(null)
         );
         verify(repository).appendMessage(conversationId, "system", "Be precise", "completed");
+        verify(knowledgeBaseService).find(knowledgeBaseId, 1L);
+        verify(repository).bindKnowledgeBases(conversationId, 1L, List.of(knowledgeBaseId));
         verify(repository).recordCompletedUsage(
                 any(UUID.class), eq(1L), eq(conversationId), eq("deepseek-chat"),
                 eq(3), eq(2), anyInt(), anyInt(), eq(true)
@@ -103,7 +110,8 @@ class ChatServiceTest {
         ChatService service = new ChatService(
                 repository, client, objectMapper, mock(TitleGenerationService.class),
                 new AiServiceProperties("http://localhost:8001", 150, "deepseek-chat", 40),
-                mock(ObjectStorageService.class)
+                mock(ObjectStorageService.class), mock(KnowledgeBaseService.class),
+                mock(KnowledgeSearchService.class)
         );
         UUID conversationId = UUID.randomUUID();
         UUID oldAssistantId = UUID.randomUUID();

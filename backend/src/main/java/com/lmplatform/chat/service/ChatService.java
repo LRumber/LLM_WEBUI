@@ -9,6 +9,9 @@ import com.lmplatform.chat.model.ModelContextMessage;
 import com.lmplatform.chat.model.PromptTemplate;
 import com.lmplatform.chat.repository.ConversationRepository;
 import com.lmplatform.file.service.ObjectStorageService;
+import com.lmplatform.knowledge.model.KnowledgeSearchResult;
+import com.lmplatform.knowledge.service.KnowledgeBaseService;
+import com.lmplatform.knowledge.service.KnowledgeSearchService;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -31,6 +34,8 @@ public class ChatService {
     private final TitleGenerationService titleGenerationService;
     private final int maxContextMessages;
     private final ObjectStorageService objectStorageService;
+    private final KnowledgeBaseService knowledgeBaseService;
+    private final KnowledgeSearchService knowledgeSearchService;
 
     public ChatService(
             ConversationRepository repository,
@@ -38,7 +43,9 @@ public class ChatService {
             ObjectMapper objectMapper,
             TitleGenerationService titleGenerationService,
             AiServiceProperties properties,
-            ObjectStorageService objectStorageService
+            ObjectStorageService objectStorageService,
+            KnowledgeBaseService knowledgeBaseService,
+            KnowledgeSearchService knowledgeSearchService
     ) {
         this.repository = repository;
         this.aiServiceClient = aiServiceClient;
@@ -46,6 +53,8 @@ public class ChatService {
         this.titleGenerationService = titleGenerationService;
         this.maxContextMessages = Math.max(2, properties.maxContextMessages());
         this.objectStorageService = objectStorageService;
+        this.knowledgeBaseService = knowledgeBaseService;
+        this.knowledgeSearchService = knowledgeSearchService;
     }
 
     /**
@@ -58,6 +67,11 @@ public class ChatService {
         PromptTemplate selectedTemplate = newConversation
                 ? repository.findPromptTemplate(request.templateId(), userId).orElse(null)
                 : null;
+        if (newConversation && request.knowledgeBaseIds() != null) {
+            // Validate every selection before creating conversation state or calling retrieval.
+            request.knowledgeBaseIds().stream().distinct()
+                    .forEach(id -> knowledgeBaseService.find(id, userId));
+        }
         UUID conversationId = newConversation
                 ? repository.createConversation(
                         userId, request.model(), request.content(),
@@ -71,6 +85,7 @@ public class ChatService {
         }
 
         if (newConversation) {
+            repository.bindKnowledgeBases(conversationId, userId, request.knowledgeBaseIds());
             // Persist the selected system instruction so every future context reconstruction is deterministic.
             if (selectedTemplate != null) {
                 repository.appendMessage(
@@ -85,9 +100,12 @@ public class ChatService {
         UUID assistantMessageId = repository.appendMessage(
                 conversationId, "assistant", "", "generating"
         );
+        List<KnowledgeSearchResult> citations = retrieveKnowledge(
+                conversationId, userId, request.content()
+        );
         streamAssistant(
                 userId, conversationId, assistantMessageId, request.model(), newConversation,
-                newConversation ? request.content() : null, request.thinkingEnabled(), output
+                newConversation ? request.content() : null, request.thinkingEnabled(), citations, output
         );
     }
 
@@ -106,7 +124,10 @@ public class ChatService {
             return;
         }
         UUID replacementId = repository.appendMessage(conversationId, "assistant", "", "generating");
-        streamAssistant(userId, conversationId, replacementId, model, false, null, false, output);
+        List<KnowledgeSearchResult> citations = retrieveKnowledge(
+                conversationId, userId, repository.latestUserContent(conversationId)
+        );
+        streamAssistant(userId, conversationId, replacementId, model, false, null, false, citations, output);
     }
 
     /** Runs the shared generation lifecycle for new turns and regenerated answers. */
@@ -118,11 +139,15 @@ public class ChatService {
             boolean newConversation,
             String firstPrompt,
             boolean thinkingEnabled,
+            List<KnowledgeSearchResult> citations,
             OutputStream output
     ) throws IOException {
         writeEvent(output, Map.of(
                 "type", "metadata", "conversation_id", conversationId, "message_id", assistantMessageId
         ));
+        if (!citations.isEmpty()) {
+            writeEvent(output, Map.of("type", "citations", "citations", citations));
+        }
 
         StringBuilder assistantContent = new StringBuilder();
         StringBuilder reasoningContent = new StringBuilder();
@@ -136,7 +161,7 @@ public class ChatService {
         try {
             aiServiceClient.streamChat(
                     model,
-                    buildModelMessages(conversationId),
+                    buildModelMessages(conversationId, citations),
                     thinkingEnabled,
                     event -> handleAiEvent(
                             event, output, assistantContent, reasoningContent,
@@ -158,6 +183,7 @@ public class ChatService {
                     reasoningDurationMs.get() == 0 ? null : reasoningDurationMs.get(),
                     null
             );
+            repository.saveCitations(assistantMessageId, citations);
             repository.recordCompletedUsage(
                     UUID.randomUUID(),
                     userId,
@@ -187,6 +213,7 @@ public class ChatService {
                     reasoningDurationMs.get() == 0 ? null : reasoningDurationMs.get(),
                     "stream_error"
             );
+            repository.saveCitations(assistantMessageId, citations);
             try {
                 writeEvent(output, Map.of("type", "error", "message", safeMessage(exception)));
             } catch (IOException clientDisconnected) {
@@ -196,7 +223,9 @@ public class ChatService {
     }
 
     /** Builds text or OpenAI-compatible image content without exposing MinIO outside the core service. */
-    private List<Map<String, ?>> buildModelMessages(UUID conversationId) throws IOException {
+    private List<Map<String, ?>> buildModelMessages(
+            UUID conversationId, List<KnowledgeSearchResult> citations
+    ) throws IOException {
         List<Map<String, ?>> result = new ArrayList<>();
         for (ModelContextMessage message : repository.modelContextMessages(
                 conversationId, maxContextMessages
@@ -224,7 +253,48 @@ public class ChatService {
             }
             result.add(Map.of("role", message.role(), "content", parts));
         }
+        if (!citations.isEmpty()) {
+            StringBuilder context = new StringBuilder("""
+                    以下是经过权限校验的知识库检索结果。请优先依据这些内容回答；引用时使用 [1]、[2] 格式。如果材料不足，请明确说明未找到可靠依据。\n\n
+                    """);
+            for (int index = 0; index < citations.size(); index++) {
+                KnowledgeSearchResult citation = citations.get(index);
+                context.append('[').append(index + 1).append("] ")
+                        .append(citation.filename());
+                if (citation.pageNumber() != null) {
+                    context.append(" 第").append(citation.pageNumber()).append("页");
+                }
+                context.append('\n').append(citation.content()).append("\n\n");
+            }
+            int firstUser = 0;
+            while (firstUser < result.size()
+                    && !"user".equals(String.valueOf(result.get(firstUser).get("role")))) {
+                firstUser++;
+            }
+            result.add(firstUser, Map.of("role", "system", "content", context.toString()));
+        }
         return result;
+    }
+
+    /** Retrieves from every immutable conversation binding and keeps the strongest unique chunks. */
+    private List<KnowledgeSearchResult> retrieveKnowledge(
+            UUID conversationId, long userId, String query
+    ) {
+        if (query == null || query.isBlank()) return List.of();
+        Map<UUID, KnowledgeSearchResult> unique = new java.util.HashMap<>();
+        for (var knowledgeBase : repository.conversationKnowledgeBases(conversationId, userId)) {
+            for (KnowledgeSearchResult result : knowledgeSearchService.search(
+                    knowledgeBase.id(), userId, query, 4
+            )) {
+                unique.merge(result.chunkId(), result, (left, right) ->
+                        left.score() >= right.score() ? left : right);
+            }
+        }
+        return unique.values().stream()
+                .filter(result -> result.score() >= 0.1)
+                .sorted(java.util.Comparator.comparingDouble(KnowledgeSearchResult::score).reversed())
+                .limit(8)
+                .toList();
     }
 
     private void handleAiEvent(

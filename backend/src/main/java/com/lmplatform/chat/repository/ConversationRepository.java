@@ -6,6 +6,9 @@ import com.lmplatform.chat.model.ConversationSummary;
 import com.lmplatform.chat.model.PromptTemplate;
 import com.lmplatform.chat.model.ModelContextMessage;
 import com.lmplatform.chat.model.ModelMessageAttachment;
+import com.lmplatform.chat.model.MessageCitation;
+import com.lmplatform.chat.model.ConversationKnowledgeBase;
+import com.lmplatform.knowledge.model.KnowledgeSearchResult;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -72,6 +75,49 @@ public class ConversationRepository {
                 userId
         );
         return count != null && count > 0;
+    }
+
+    /** Persists authorized knowledge snapshots once, before the first conversation turn. */
+    @Transactional
+    public void bindKnowledgeBases(
+            UUID conversationId, long userId, List<UUID> knowledgeBaseIds
+    ) {
+        if (knowledgeBaseIds == null) return;
+        int position = 0;
+        for (UUID knowledgeBaseId : knowledgeBaseIds.stream().distinct().toList()) {
+            int inserted = jdbc.update("""
+                    INSERT INTO conversation_knowledge_base (
+                        conversation_id, knowledge_base_id, knowledge_base_name, position
+                    ) SELECT ?, kb.id, kb.name, ?
+                      FROM knowledge_base kb
+                      JOIN knowledge_member km ON km.knowledge_base_id = kb.id AND km.user_id = ?
+                     WHERE kb.id = ? AND kb.status = 'active'
+                    """, conversationId, position++, userId, knowledgeBaseId);
+            if (inserted != 1) throw new IllegalArgumentException("Knowledge base is not accessible");
+        }
+    }
+
+    public List<ConversationKnowledgeBase> conversationKnowledgeBases(
+            UUID conversationId, long userId
+    ) {
+        return jdbc.query("""
+                SELECT ckb.knowledge_base_id, ckb.knowledge_base_name
+                FROM conversation_knowledge_base ckb
+                JOIN conversation c ON c.id = ckb.conversation_id
+                WHERE ckb.conversation_id = ? AND c.user_id = ? AND c.deleted_at IS NULL
+                ORDER BY ckb.position
+                """, (rs, rowNum) -> new ConversationKnowledgeBase(
+                rs.getObject("knowledge_base_id", UUID.class), rs.getString("knowledge_base_name")
+        ), conversationId, userId);
+    }
+
+    public String latestUserContent(UUID conversationId) {
+        return jdbc.query("""
+                SELECT content FROM conversation_message
+                WHERE conversation_id = ? AND role = 'user' AND superseded_at IS NULL
+                ORDER BY sequence_no DESC LIMIT 1
+                """, (rs, rowNum) -> rs.getString("content"), conversationId)
+                .stream().findFirst().orElse("");
     }
 
     /** Appends a message with the next stable sequence number and touches the parent conversation. */
@@ -230,6 +276,12 @@ public class ConversationRepository {
                  ORDER BY sequence_no
                 """, branchId, conversationId, sequence);
         jdbc.update("""
+                INSERT INTO conversation_knowledge_base (
+                    conversation_id, knowledge_base_id, knowledge_base_name, position, created_at
+                ) SELECT ?, knowledge_base_id, knowledge_base_name, position, created_at
+                    FROM conversation_knowledge_base WHERE conversation_id = ?
+                """, branchId, conversationId);
+        jdbc.update("""
                 UPDATE conversation SET message_count = (
                     SELECT COUNT(*) FROM conversation_message WHERE conversation_id = ?
                 ) WHERE id = ?
@@ -377,6 +429,23 @@ public class ConversationRepository {
                 """, messageId, messageId);
     }
 
+    /** Stores immutable source snapshots so historical answers retain their original evidence. */
+    @Transactional
+    public void saveCitations(UUID messageId, List<KnowledgeSearchResult> results) {
+        jdbc.update("DELETE FROM message_citation WHERE message_id = ?", messageId);
+        for (int index = 0; index < results.size(); index++) {
+            KnowledgeSearchResult result = results.get(index);
+            jdbc.update("""
+                    INSERT INTO message_citation (
+                        message_id, citation_no, chunk_id, document_id, file_id,
+                        filename, page_number, title_path, content_snapshot, relevance_score
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, messageId, index + 1, result.chunkId(), result.documentId(),
+                    result.fileId(), result.filename(), result.pageNumber(), result.titlePath(),
+                    result.content(), result.score());
+        }
+    }
+
     /** Updates an AI title only while it is still temporary, preserving later manual edits. */
     public boolean updateGeneratedTitle(UUID conversationId, String title) {
         int updated = jdbc.update("""
@@ -483,6 +552,10 @@ public class ConversationRepository {
                 SELECT c.id, c.title, c.model_key, c.message_count, c.created_at, c.updated_at,
                        c.prompt_template_id, c.prompt_template_name,
                        COALESCE((
+                           SELECT string_agg(ckb.knowledge_base_name, '、' ORDER BY ckb.position)
+                           FROM conversation_knowledge_base ckb WHERE ckb.conversation_id = c.id
+                       ), '') AS knowledge_base_names,
+                       COALESCE((
                            SELECT cm.content FROM conversation_message cm
                            WHERE cm.conversation_id = c.id AND cm.content <> ''
                            ORDER BY cm.sequence_no DESC LIMIT 1
@@ -499,6 +572,7 @@ public class ConversationRepository {
                 rs.getString("preview"),
                 rs.getObject("prompt_template_id", UUID.class),
                 rs.getString("prompt_template_name"),
+                rs.getString("knowledge_base_names"),
                 rs.getObject("created_at", OffsetDateTime.class),
                 rs.getObject("updated_at", OffsetDateTime.class)
         ), userId);
@@ -526,6 +600,7 @@ public class ConversationRepository {
                 rs.getObject("reasoning_duration_ms", Integer.class),
                 rs.getObject("created_at", OffsetDateTime.class),
                 rs.getObject("edited_at", OffsetDateTime.class),
+                List.of(),
                 List.of()
         ), conversationId, userId);
         Map<UUID, List<ConversationAttachment>> attachments = new HashMap<>();
@@ -545,12 +620,32 @@ public class ConversationRepository {
                     rs.getString("media_type"), rs.getString("asset_kind"), rs.getString("status")
             ));
         }, conversationId, userId);
+        Map<UUID, List<MessageCitation>> citations = new HashMap<>();
+        jdbc.query("""
+                SELECT mc.message_id, mc.citation_no, mc.file_id, mc.filename, mc.page_number,
+                       mc.title_path, mc.content_snapshot, mc.relevance_score
+                FROM message_citation mc
+                JOIN conversation_message cm ON cm.id = mc.message_id
+                JOIN conversation c ON c.id = cm.conversation_id
+                WHERE cm.conversation_id = ? AND c.user_id = ? AND c.deleted_at IS NULL
+                ORDER BY mc.message_id, mc.citation_no
+                """, rs -> {
+            citations.computeIfAbsent(
+                    rs.getObject("message_id", UUID.class), ignored -> new ArrayList<>()
+            ).add(new MessageCitation(
+                    rs.getInt("citation_no"), rs.getObject("file_id", UUID.class),
+                    rs.getString("filename"), rs.getObject("page_number", Integer.class),
+                    rs.getString("title_path"), rs.getString("content_snapshot"),
+                    rs.getDouble("relevance_score")
+            ));
+        }, conversationId, userId);
         return messages.stream().map(message -> new ConversationMessage(
                 message.id(), message.role(), message.content(), message.status(),
                 message.inputTokens(), message.outputTokens(),
                 message.reasoningContent(), message.reasoningDurationMs(),
                 message.createdAt(), message.editedAt(),
-                List.copyOf(attachments.getOrDefault(message.id(), List.of()))
+                List.copyOf(attachments.getOrDefault(message.id(), List.of())),
+                List.copyOf(citations.getOrDefault(message.id(), List.of()))
         )).toList();
     }
 }

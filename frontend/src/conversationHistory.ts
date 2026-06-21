@@ -6,6 +6,7 @@ export interface ConversationSummary {
   preview: string
   promptTemplateId?: string | null
   promptTemplateName?: string | null
+  knowledgeBaseNames?: string | null
   updatedAt: string
 }
 

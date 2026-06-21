@@ -16,6 +16,7 @@ public record ConversationMessage(
         Integer reasoningDurationMs,
         OffsetDateTime createdAt,
         OffsetDateTime editedAt,
-        List<ConversationAttachment> attachments
+        List<ConversationAttachment> attachments,
+        List<MessageCitation> citations
 ) {
 }

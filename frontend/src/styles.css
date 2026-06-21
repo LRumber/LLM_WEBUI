@@ -360,6 +360,18 @@ button:disabled { cursor: not-allowed; }
 .knowledge-button { height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 9px; color: #6d6d6d; background: transparent; border: 0; border-radius: 7px; font-size: 12px; }
 .knowledge-button:hover:not(:disabled) { background: #f0f0f0; }
 .knowledge-button:disabled { color: #b0b0b0; }
+.knowledge-button.active { max-width: 220px; color: #286b53; background: #edf5f1; }
+.knowledge-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-chat-option { min-width: 150px; display: grid; grid-template-columns: 16px 1fr; align-items: center; gap: 5px; }
+.message-citations { margin-top: 14px; padding-top: 9px; border-top: 1px solid #e6e9e7; }
+.message-citations summary { display: flex; align-items: center; gap: 5px; color: #64716b; font-size: 11px; cursor: pointer; list-style: none; }
+.message-citations[open] summary { margin-bottom: 7px; }
+.message-citations > button { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; margin-top: 5px; padding: 8px 10px; color: #4f5b55; text-align: left; background: #f7f9f8; border: 1px solid #e2e7e4; border-radius: 7px; }
+.message-citations > button:hover { border-color: #adc6bb; }
+.message-citations > button span { font-size: 11px; font-weight: 600; }
+.message-citations > button small { margin-left: 7px; color: #8a948f; font-weight: 400; }
+.message-citations > button p { grid-column: 1; max-height: 42px; overflow: hidden; margin: 0; color: #7a847f; font-size: 10px; line-height: 1.5; }
+.message-citations > button svg { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: #87918c; }
 .send-button { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; color: #ffffff; background: #202020; border: 0; border-radius: 50%; }
 .send-button:hover:not(:disabled) { background: #000000; }
 .send-button:disabled { color: #a8a8a8; background: #e7e7e7; }

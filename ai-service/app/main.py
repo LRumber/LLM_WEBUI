@@ -10,13 +10,15 @@ from fastapi.responses import StreamingResponse
 from app.chat import ChatConfigurationError, ChatGateway, ModelBusyError, UpstreamChatError
 from app.config import get_settings
 from app.documents import DocumentParseError, DocumentParser
-from app.models import ChatRequest, HealthResponse, ModelDiscoveryRequest, ModelEndpoint, ModelHealthResponse, ParsedDocument
+from app.embeddings import EmbeddingError, EmbeddingGateway
+from app.models import ChatRequest, EmbeddingRequest, EmbeddingResponse, HealthResponse, ModelDiscoveryRequest, ModelEndpoint, ModelHealthResponse, ParsedDocument
 from app.registry import ModelRegistry
 
 settings = get_settings()
 registry = ModelRegistry(settings.model_config_path)
 chat_gateway = ChatGateway(settings)
 document_parser = DocumentParser()
+embedding_gateway = EmbeddingGateway(settings)
 
 
 @asynccontextmanager
@@ -135,6 +137,18 @@ def stream_chat(request: ChatRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/v1/embeddings", response_model=EmbeddingResponse)
+async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
+    """Generate vectors through an enabled embedding-capable LAN or local model endpoint."""
+    model = registry.get(request.model)
+    if model is None or "embedding" not in model.capabilities:
+        raise HTTPException(status_code=404, detail="Embedding model not found")
+    try:
+        return await embedding_gateway.embed(request, model)
+    except EmbeddingError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/v1/documents/parse", response_model=ParsedDocument)

@@ -13,9 +13,14 @@ import org.springframework.stereotype.Service;
 public class KnowledgeBaseService {
 
     private final KnowledgeBaseRepository repository;
+    private final KnowledgeIndexingService indexingService;
 
-    public KnowledgeBaseService(KnowledgeBaseRepository repository) {
+    public KnowledgeBaseService(
+            KnowledgeBaseRepository repository,
+            KnowledgeIndexingService indexingService
+    ) {
         this.repository = repository;
+        this.indexingService = indexingService;
     }
 
     public KnowledgeBaseSummary create(long userId, KnowledgeBaseRequest request) {
@@ -56,10 +61,12 @@ public class KnowledgeBaseService {
     }
 
     public KnowledgeDocumentSummary attachDocument(UUID knowledgeBaseId, UUID fileId, long userId) {
-        return repository.attachDocument(knowledgeBaseId, fileId, userId)
+        KnowledgeDocumentSummary document = repository.attachDocument(knowledgeBaseId, fileId, userId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Document must be an owned file and the knowledge base must be editable"
                 ));
+        indexingService.indexDocument(document.id());
+        return document;
     }
 
     public void removeDocument(UUID knowledgeBaseId, UUID documentId, long userId) {

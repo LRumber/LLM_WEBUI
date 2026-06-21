@@ -2,6 +2,8 @@ package com.lmplatform.knowledge.repository;
 
 import com.lmplatform.knowledge.model.KnowledgeBaseSummary;
 import com.lmplatform.knowledge.model.KnowledgeDocumentSummary;
+import com.lmplatform.knowledge.model.KnowledgeIndexSource;
+import com.lmplatform.knowledge.model.KnowledgeChunk;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -119,6 +121,10 @@ public class KnowledgeBaseRepository {
                   AND fa.asset_kind = 'document'
                 """, documentId, userId, fileId, userId, knowledgeBaseId);
         if (inserted != 1) return Optional.empty();
+        jdbc.update("""
+                INSERT INTO processing_task (id, task_type, resource_id)
+                VALUES (?, 'knowledge_index', ?)
+                """, UUID.randomUUID(), documentId);
         return listDocuments(knowledgeBaseId, userId).stream()
                 .filter(document -> document.id().equals(documentId)).findFirst();
     }
@@ -134,6 +140,90 @@ public class KnowledgeBaseRepository {
                   AND kb.id = kd.knowledge_base_id AND kb.status = 'active'
                   AND kd.status <> 'superseded'
                 """, documentId, knowledgeBaseId, userId) == 1;
+    }
+
+    /** Returns parsed text only after the file parser has completed successfully. */
+    public Optional<KnowledgeIndexSource> findIndexSource(UUID documentId) {
+        return jdbc.query("""
+                SELECT kd.id, kd.file_id, fa.extracted_text
+                FROM knowledge_document kd
+                JOIN knowledge_base kb ON kb.id = kd.knowledge_base_id AND kb.status = 'active'
+                JOIN file_asset fa ON fa.id = kd.file_id AND fa.status = 'ready'
+                WHERE kd.id = ? AND kd.status NOT IN ('ready', 'superseded')
+                  AND fa.extracted_text IS NOT NULL
+                """, (rs, rowNum) -> new KnowledgeIndexSource(
+                rs.getObject("id", UUID.class), rs.getObject("file_id", UUID.class),
+                rs.getString("extracted_text")
+        ), documentId).stream().findFirst();
+    }
+
+    public List<UUID> findActiveDocumentIds(UUID fileId) {
+        return jdbc.queryForList("""
+                SELECT id FROM knowledge_document
+                WHERE file_id = ? AND status NOT IN ('ready', 'superseded')
+                """, UUID.class, fileId);
+    }
+
+    public void markIndexing(UUID documentId) {
+        jdbc.update("""
+                UPDATE knowledge_document SET status = 'chunking', error_message = NULL,
+                    updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                """, documentId);
+        jdbc.update("""
+                UPDATE processing_task SET status = 'running', attempts = attempts + 1,
+                    started_at = CURRENT_TIMESTAMP, error_message = NULL
+                WHERE resource_id = ? AND task_type = 'knowledge_index' AND status IN ('queued', 'failed')
+                """, documentId);
+    }
+
+    /** Replaces all chunks atomically so readers never observe a partially indexed document. */
+    @Transactional
+    public void replaceChunks(
+            UUID documentId, List<KnowledgeChunk> chunks, List<float[]> vectors, String model
+    ) {
+        if (chunks.size() != vectors.size()) throw new IllegalArgumentException("Chunk/vector count mismatch");
+        jdbc.update("DELETE FROM document_chunk WHERE document_id = ?", documentId);
+        for (int index = 0; index < chunks.size(); index++) {
+            KnowledgeChunk chunk = chunks.get(index);
+            Float[] boxed = new Float[vectors.get(index).length];
+            for (int vectorIndex = 0; vectorIndex < boxed.length; vectorIndex++) {
+                boxed[vectorIndex] = vectors.get(index)[vectorIndex];
+            }
+            jdbc.update("""
+                    INSERT INTO document_chunk (
+                        id, document_id, chunk_index, content, token_count,
+                        embedding, embedding_model
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, statement -> {
+                statement.setObject(1, UUID.randomUUID());
+                statement.setObject(2, documentId);
+                statement.setInt(3, chunk.index());
+                statement.setString(4, chunk.content());
+                statement.setInt(5, chunk.tokenCount());
+                statement.setArray(6, statement.getConnection().createArrayOf("real", boxed));
+                statement.setString(7, model);
+            });
+        }
+        jdbc.update("""
+                UPDATE knowledge_document SET status = 'ready', chunk_count = ?, error_message = NULL,
+                    updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                """, chunks.size(), documentId);
+        jdbc.update("""
+                UPDATE processing_task SET status = 'completed', finished_at = CURRENT_TIMESTAMP
+                WHERE resource_id = ? AND task_type = 'knowledge_index'
+                """, documentId);
+    }
+
+    public void failIndexing(UUID documentId, String message) {
+        jdbc.update("""
+                UPDATE knowledge_document SET status = 'failed', error_message = ?,
+                    updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                """, message, documentId);
+        jdbc.update("""
+                UPDATE processing_task SET status = 'failed', error_message = ?,
+                    finished_at = CURRENT_TIMESTAMP
+                WHERE resource_id = ? AND task_type = 'knowledge_index'
+                """, message, documentId);
     }
 
     private KnowledgeBaseSummary mapSummary(java.sql.ResultSet rs) throws java.sql.SQLException {

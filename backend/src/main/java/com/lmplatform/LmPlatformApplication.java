@@ -4,6 +4,7 @@ import com.lmplatform.admin.config.AdminBootstrapProperties;
 import com.lmplatform.auth.config.OAuth2GatewayProperties;
 import com.lmplatform.chat.config.AiServiceProperties;
 import com.lmplatform.file.config.ObjectStorageProperties;
+import com.lmplatform.knowledge.config.KnowledgeProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -14,7 +15,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
         AdminBootstrapProperties.class,
         OAuth2GatewayProperties.class,
         AiServiceProperties.class,
-        ObjectStorageProperties.class
+        ObjectStorageProperties.class,
+        KnowledgeProperties.class
 })
 public class LmPlatformApplication {
 

@@ -28,4 +28,13 @@ public class AsyncConfig {
         executor.setConcurrencyLimit(2);
         return executor;
     }
+
+    /** Bounds embedding traffic independently from parsing and interactive model requests. */
+    @Bean("knowledgeTaskExecutor")
+    Executor knowledgeTaskExecutor() {
+        SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor("knowledge-indexer-");
+        executor.setVirtualThreads(true);
+        executor.setConcurrencyLimit(2);
+        return executor;
+    }
 }

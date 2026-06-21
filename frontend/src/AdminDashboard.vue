@@ -53,7 +53,7 @@ interface ModelRegistration {
   display_name: string
   provider: string
   engine: 'vllm' | 'sglang' | 'ollama' | 'llama.cpp' | 'openai-compatible'
-  category: 'language' | 'multimodal'
+  category: 'language' | 'multimodal' | 'embedding' | 'rerank'
   base_url: string
   model_name: string
   capabilities: string[]
@@ -258,9 +258,16 @@ const discoverModels = async () => {
 const saveModel = async () => {
   modelSaving.value = true
   try {
-    modelForm.value.capabilities = modelForm.value.category === 'multimodal'
-      ? [...new Set([...modelForm.value.capabilities, 'chat', 'vision'])]
-      : [...new Set(['chat', ...modelForm.value.capabilities.filter((item) => item !== 'vision')])]
+    if (modelForm.value.category === 'embedding') {
+      modelForm.value.capabilities = ['embedding']
+      modelForm.value.frontend_visible = false
+    } else if (modelForm.value.category === 'rerank') {
+      modelForm.value.capabilities = ['rerank']
+      modelForm.value.frontend_visible = false
+    } else {
+      modelForm.value.capabilities = modelForm.value.category === 'multimodal'
+        ? ['chat', 'vision'] : ['chat']
+    }
     const response = await fetch(`/api/admin/models/${encodeURIComponent(modelForm.value.key)}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modelForm.value),
     })
@@ -378,7 +385,7 @@ onMounted(checkSession)
         <div class="model-grid">
           <article v-for="model in models" :key="model.key" class="model-card">
             <div class="model-card-heading"><span><Bot :size="18" /></span><div><strong>{{ model.display_name }}</strong><small>{{ model.key }}</small></div><i :class="{ enabled: model.enabled }">{{ model.enabled ? '启用' : '停用' }}</i></div>
-            <dl><div><dt>类型</dt><dd>{{ model.category === 'multimodal' ? '多模态' : '大语言模型' }}</dd></div><div><dt>运行</dt><dd>{{ model.enabled ? '启用' : '停用' }}</dd></div><div><dt>前台展示</dt><dd>{{ model.frontend_visible ? '展示' : '隐藏' }}</dd></div><div><dt>上下文</dt><dd>{{ model.context_window || '-' }}</dd></div></dl>
+            <dl><div><dt>类型</dt><dd>{{ ({ language: '大语言模型', multimodal: '多模态', embedding: 'Embedding', rerank: 'Rerank' } as Record<string, string>)[model.category] }}</dd></div><div><dt>运行</dt><dd>{{ model.enabled ? '启用' : '停用' }}</dd></div><div><dt>前台展示</dt><dd>{{ model.frontend_visible ? '展示' : '隐藏' }}</dd></div><div><dt>上下文</dt><dd>{{ model.context_window || '-' }}</dd></div></dl>
             <p>{{ model.base_url }}</p>
             <div class="model-card-actions"><button type="button" @click="checkModel(model)">{{ modelHealth[model.key] || '健康检查' }}</button><button type="button" @click="editModel(model)">编辑</button><button class="danger" type="button" @click="deleteModel(model)">移除</button></div>
           </article>
@@ -408,7 +415,7 @@ onMounted(checkSession)
           <div class="model-form-grid">
             <label>模型标识<input v-model="modelForm.key" pattern="[a-z0-9][a-z0-9._-]+" required /></label>
             <label>显示名称<input v-model="modelForm.display_name" required /></label>
-            <label>模型类型<select v-model="modelForm.category"><option value="language">大语言模型</option><option value="multimodal">多模态模型</option></select></label>
+            <label>模型类型<select v-model="modelForm.category"><option value="language">大语言模型</option><option value="multimodal">多模态模型</option><option value="embedding">Embedding 服务</option><option value="rerank">Rerank 服务</option></select></label>
             <label>上下文窗口<input v-model.number="modelForm.context_window" type="number" min="1" /></label>
             <label class="wide">API 地址<input v-model="modelForm.base_url" type="url" placeholder="http://127.0.0.1:8000/v1" required /></label>
             <label class="wide">API Key<input v-model="modelForm.api_key" type="password" autocomplete="new-password" placeholder="编辑时留空表示保留原密钥" /></label>

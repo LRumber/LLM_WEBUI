@@ -31,6 +31,8 @@ class ModelCategory(StrEnum):
 
     LANGUAGE = "language"
     MULTIMODAL = "multimodal"
+    EMBEDDING = "embedding"
+    RERANK = "rerank"
 
 
 class ModelEndpoint(BaseModel):
@@ -128,3 +130,27 @@ class TokenUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+
+
+class EmbeddingRequest(BaseModel):
+    """OpenAI-compatible batch embedding request resolved through a registered model key."""
+
+    model: str
+    input: str | list[str]
+
+
+class EmbeddingItem(BaseModel):
+    """One vector in the same order as the submitted batch."""
+
+    object: Literal["embedding"] = "embedding"
+    index: int
+    embedding: list[float]
+
+
+class EmbeddingResponse(BaseModel):
+    """Provider-neutral embedding response consumed by the Java indexing worker."""
+
+    object: Literal["list"] = "list"
+    data: list[EmbeddingItem]
+    model: str
+    usage: TokenUsage = Field(default_factory=TokenUsage)

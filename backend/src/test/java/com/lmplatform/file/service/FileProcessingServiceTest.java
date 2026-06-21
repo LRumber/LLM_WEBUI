@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.eq;
 
 import com.lmplatform.chat.client.AiServiceClient;
 import com.lmplatform.file.repository.FileRepository;
+import com.lmplatform.knowledge.service.KnowledgeIndexingService;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -23,7 +24,7 @@ class FileProcessingServiceTest {
         when(client.parseDocument(any(byte[].class), eq("guide.md"), eq("text/markdown")))
                 .thenThrow(new NoClassDefFoundError("missing-runtime-class"));
 
-        new FileProcessingService(repository, client)
+        new FileProcessingService(repository, client, mock(KnowledgeIndexingService.class))
                 .process(fileId, new byte[]{1}, "guide.md", "text/markdown");
 
         verify(repository).markProcessing(fileId);

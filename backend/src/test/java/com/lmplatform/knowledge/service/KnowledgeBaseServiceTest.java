@@ -26,7 +26,7 @@ class KnowledgeBaseServiceTest {
         when(repository.createPersonal(9L, "产品资料", "内部文档", null)).thenReturn(id);
         when(repository.findAccessible(id, 9L)).thenReturn(Optional.of(summary));
 
-        KnowledgeBaseSummary result = new KnowledgeBaseService(repository).create(
+        KnowledgeBaseSummary result = service(repository).create(
                 9L, new KnowledgeBaseRequest("  产品资料  ", " 内部文档 ", " ")
         );
 
@@ -40,7 +40,7 @@ class KnowledgeBaseServiceTest {
         UUID id = UUID.randomUUID();
         when(repository.updateOwned(id, 9L, "资料", null, null)).thenReturn(false);
 
-        assertThatThrownBy(() -> new KnowledgeBaseService(repository).update(
+        assertThatThrownBy(() -> service(repository).update(
                 id, 9L, new KnowledgeBaseRequest("资料", null, null)
         )).isInstanceOf(KnowledgeBaseService.KnowledgeBaseNotFoundException.class);
     }
@@ -51,7 +51,7 @@ class KnowledgeBaseServiceTest {
         KnowledgeBaseSummary summary = summary(UUID.randomUUID(), "个人资料");
         when(repository.listAccessible(9L)).thenReturn(java.util.List.of(summary));
 
-        assertThat(new KnowledgeBaseService(repository).list(9L)).containsExactly(summary);
+        assertThat(service(repository).list(9L)).containsExactly(summary);
     }
 
     @Test
@@ -65,8 +65,10 @@ class KnowledgeBaseServiceTest {
         );
         when(repository.attachDocument(baseId, fileId, 9L)).thenReturn(Optional.of(document));
 
-        assertThat(new KnowledgeBaseService(repository).attachDocument(baseId, fileId, 9L))
+        KnowledgeIndexingService indexing = mock(KnowledgeIndexingService.class);
+        assertThat(new KnowledgeBaseService(repository, indexing).attachDocument(baseId, fileId, 9L))
                 .isEqualTo(document);
+        verify(indexing).indexDocument(document.id());
     }
 
     @Test
@@ -77,7 +79,7 @@ class KnowledgeBaseServiceTest {
         when(repository.findAccessible(baseId, 9L)).thenReturn(Optional.of(base));
         when(repository.listDocuments(baseId, 9L)).thenReturn(List.of());
 
-        assertThat(new KnowledgeBaseService(repository).listDocuments(baseId, 9L)).isEmpty();
+        assertThat(service(repository).listDocuments(baseId, 9L)).isEmpty();
         verify(repository).findAccessible(baseId, 9L);
     }
 
@@ -86,5 +88,9 @@ class KnowledgeBaseServiceTest {
         return new KnowledgeBaseSummary(
                 id, name, null, null, "personal", "owner", 0, now, now
         );
+    }
+
+    private KnowledgeBaseService service(KnowledgeBaseRepository repository) {
+        return new KnowledgeBaseService(repository, mock(KnowledgeIndexingService.class));
     }
 }

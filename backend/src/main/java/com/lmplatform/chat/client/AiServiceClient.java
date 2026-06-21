@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.ArrayList;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.core.io.ByteArrayResource;
@@ -110,6 +111,33 @@ public class AiServiceClient {
             return objectMapper.readTree(response);
         } catch (IOException exception) {
             throw new IllegalStateException("Document parser returned invalid JSON", exception);
+        }
+    }
+
+    /** Generates a batch of vectors through a registered OpenAI-compatible embedding model. */
+    public List<float[]> embed(String model, List<String> inputs) {
+        String response = restClient.post()
+                .uri("/v1/embeddings")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .body(Map.of("model", model, "input", inputs))
+                .retrieve()
+                .body(String.class);
+        try {
+            JsonNode data = objectMapper.readTree(response).path("data");
+            List<float[]> vectors = new ArrayList<>();
+            for (JsonNode item : data) {
+                JsonNode embedding = item.path("embedding");
+                float[] vector = new float[embedding.size()];
+                for (int index = 0; index < embedding.size(); index++) {
+                    vector[index] = (float) embedding.get(index).asDouble();
+                }
+                vectors.add(vector);
+            }
+            if (vectors.size() != inputs.size()) throw new IllegalStateException("Incomplete embedding batch");
+            return vectors;
+        } catch (IOException exception) {
+            throw new IllegalStateException("Embedding service returned invalid JSON", exception);
         }
     }
 

@@ -49,6 +49,12 @@ platform:
     secret-key: ${MINIO_ROOT_PASSWORD:change-me-now}
     bucket: ${MINIO_BUCKET:lm-platform-files}
     max-file-bytes: ${MAX_UPLOAD_BYTES:104857600}
+  knowledge:
+    # This key references an embedding-capable model registered in the existing model admin page.
+    embedding-model: ${AI_EMBEDDING_MODEL:}
+    chunk-tokens: ${KNOWLEDGE_CHUNK_TOKENS:600}
+    overlap-tokens: ${KNOWLEDGE_OVERLAP_TOKENS:100}
+    embedding-batch-size: ${KNOWLEDGE_EMBEDDING_BATCH_SIZE:16}
 
 # Expose only the operational endpoints required by local monitoring.
 management:

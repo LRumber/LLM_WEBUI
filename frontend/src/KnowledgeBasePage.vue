@@ -27,6 +27,17 @@ interface KnowledgeDocument {
 
 interface UploadedAsset { id: string }
 
+interface KnowledgeSearchResult {
+  chunkId: string
+  filename: string
+  content: string
+  pageNumber?: number | null
+  titlePath?: string | null
+  keywordScore: number
+  vectorScore: number
+  score: number
+}
+
 /** Personal knowledge-space management stays separate from the chat workspace. */
 const knowledgeBases = ref<KnowledgeBase[]>([])
 const selectedId = ref<string | null>(null)
@@ -37,6 +48,9 @@ const editorOpen = ref(false)
 const editingId = ref<string | null>(null)
 const form = ref({ name: '', description: '', icon: 'book' })
 const fileInput = ref<HTMLInputElement | null>(null)
+const searchQuery = ref('')
+const searchResults = ref<KnowledgeSearchResult[]>([])
+const searching = ref(false)
 let pollTimer: number | null = null
 
 const selected = computed(() => knowledgeBases.value.find((item) => item.id === selectedId.value) ?? null)
@@ -164,6 +178,25 @@ const removeDocument = async (document: KnowledgeDocument) => {
   await Promise.all([loadDocuments(), loadKnowledgeBases()])
 }
 
+/** Runs the same permission-filtered retrieval endpoint that chat will consume later. */
+const testRetrieval = async () => {
+  if (!selectedId.value || !searchQuery.value.trim()) return
+  searching.value = true
+  try {
+    const response = await fetch(`/api/knowledge-bases/${selectedId.value}/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: searchQuery.value, topK: 8 }),
+    })
+    if (!response.ok) throw new Error('检索失败，请检查文档状态和 Embedding 配置')
+    searchResults.value = await response.json()
+  } catch (error) {
+    window.alert((error as Error).message)
+  } finally {
+    searching.value = false
+  }
+}
+
 onMounted(async () => {
   loading.value = true
   try {
@@ -214,6 +247,22 @@ onBeforeUnmount(() => {
           <input ref="fileInput" type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.txt,.md" @change="uploadDocuments" />
           <button type="button" :disabled="uploading" @click="fileInput?.click()"><Upload :size="16" />{{ uploading ? '上传中…' : '上传文档' }}</button>
         </div>
+
+        <section class="knowledge-search-test">
+          <header><div><strong>检索测试</strong><span>查看实际召回的原文和相关度</span></div></header>
+          <form @submit.prevent="testRetrieval">
+            <input v-model="searchQuery" placeholder="输入一个问题或关键词" />
+            <button type="submit" :disabled="searching || !searchQuery.trim()">{{ searching ? '检索中…' : '开始检索' }}</button>
+          </form>
+          <div v-if="searchResults.length" class="knowledge-search-results">
+            <article v-for="(result, index) in searchResults" :key="result.chunkId">
+              <div><strong>{{ index + 1 }}. {{ result.filename }}</strong><span>相关度 {{ Math.round(result.score * 100) }}%<template v-if="result.pageNumber"> · 第 {{ result.pageNumber }} 页</template></span></div>
+              <p>{{ result.content }}</p>
+              <small>关键词 {{ result.keywordScore.toFixed(2) }} · 向量 {{ result.vectorScore.toFixed(2) }}</small>
+            </article>
+          </div>
+          <p v-else-if="searchQuery && !searching" class="knowledge-search-empty">尚无检索结果</p>
+        </section>
 
         <div v-if="documents.length" class="knowledge-document-list">
           <article v-for="document in documents" :key="document.id" class="knowledge-document-card">

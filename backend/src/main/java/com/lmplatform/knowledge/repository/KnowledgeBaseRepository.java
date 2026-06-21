@@ -4,6 +4,9 @@ import com.lmplatform.knowledge.model.KnowledgeBaseSummary;
 import com.lmplatform.knowledge.model.KnowledgeDocumentSummary;
 import com.lmplatform.knowledge.model.KnowledgeIndexSource;
 import com.lmplatform.knowledge.model.KnowledgeChunk;
+import com.lmplatform.knowledge.model.KnowledgeSearchCandidate;
+import com.lmplatform.knowledge.model.KnowledgeSearchResult;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -17,9 +20,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class KnowledgeBaseRepository {
 
     private final JdbcTemplate jdbc;
+    private final ObjectMapper objectMapper;
 
-    public KnowledgeBaseRepository(JdbcTemplate jdbc) {
+    public KnowledgeBaseRepository(JdbcTemplate jdbc, ObjectMapper objectMapper) {
         this.jdbc = jdbc;
+        this.objectMapper = objectMapper;
     }
 
     /** Creates a personal space and its owner membership as one atomic operation. */
@@ -226,6 +231,68 @@ public class KnowledgeBaseRepository {
                 """, message, documentId);
     }
 
+    /** Retrieves lexical candidates under the same membership boundary used by document listing. */
+    public List<KnowledgeSearchCandidate> searchKeywordCandidates(
+            UUID knowledgeBaseId, long userId, String query, int limit
+    ) {
+        return jdbc.query("""
+                SELECT dc.id, dc.document_id, kd.file_id, fa.original_name, dc.content,
+                       dc.page_number, dc.title_path, dc.embedding,
+                       GREATEST(
+                           ts_rank(dc.search_vector, plainto_tsquery('simple', ?)),
+                           CASE WHEN dc.content ILIKE ('%' || ? || '%') THEN 1.0 ELSE 0.0 END
+                       ) AS keyword_score
+                FROM document_chunk dc
+                JOIN knowledge_document kd ON kd.id = dc.document_id AND kd.status = 'ready'
+                JOIN knowledge_member km ON km.knowledge_base_id = kd.knowledge_base_id
+                                        AND km.user_id = ?
+                JOIN knowledge_base kb ON kb.id = kd.knowledge_base_id AND kb.status = 'active'
+                JOIN file_asset fa ON fa.id = kd.file_id
+                WHERE kd.knowledge_base_id = ?
+                  AND (dc.search_vector @@ plainto_tsquery('simple', ?)
+                       OR dc.content ILIKE ('%' || ? || '%'))
+                ORDER BY keyword_score DESC, dc.chunk_index
+                LIMIT ?
+                """, (rs, rowNum) -> mapSearchCandidate(rs),
+                query, query, userId, knowledgeBaseId, query, query, limit);
+    }
+
+    /** Loads bounded vector candidates; pgvector replaces this scan in the final optimized image. */
+    public List<KnowledgeSearchCandidate> listVectorCandidates(
+            UUID knowledgeBaseId, long userId, int limit
+    ) {
+        return jdbc.query("""
+                SELECT dc.id, dc.document_id, kd.file_id, fa.original_name, dc.content,
+                       dc.page_number, dc.title_path, dc.embedding, 0.0 AS keyword_score
+                FROM document_chunk dc
+                JOIN knowledge_document kd ON kd.id = dc.document_id AND kd.status = 'ready'
+                JOIN knowledge_member km ON km.knowledge_base_id = kd.knowledge_base_id
+                                        AND km.user_id = ?
+                JOIN knowledge_base kb ON kb.id = kd.knowledge_base_id AND kb.status = 'active'
+                JOIN file_asset fa ON fa.id = kd.file_id
+                WHERE kd.knowledge_base_id = ? AND dc.embedding IS NOT NULL
+                ORDER BY kd.updated_at DESC, dc.chunk_index
+                LIMIT ?
+                """, (rs, rowNum) -> mapSearchCandidate(rs), userId, knowledgeBaseId, limit);
+    }
+
+    public void recordRetrieval(
+            UUID knowledgeBaseId, long userId, String query, String mode,
+            int candidateCount, int durationMs, List<KnowledgeSearchResult> results
+    ) {
+        try {
+            jdbc.update("""
+                    INSERT INTO retrieval_log (
+                        id, knowledge_base_id, user_id, query_text, retrieval_mode,
+                        candidate_count, result_count, duration_ms, result_snapshot
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+                    """, UUID.randomUUID(), knowledgeBaseId, userId, query, mode,
+                    candidateCount, results.size(), durationMs, objectMapper.writeValueAsString(results));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
+            throw new IllegalStateException("Could not serialize retrieval diagnostics", exception);
+        }
+    }
+
     private KnowledgeBaseSummary mapSummary(java.sql.ResultSet rs) throws java.sql.SQLException {
         return new KnowledgeBaseSummary(
                 rs.getObject("id", UUID.class),
@@ -248,6 +315,24 @@ public class KnowledgeBaseRepository {
                 rs.getString("status"), rs.getInt("chunk_count"),
                 rs.getString("error_message"),
                 rs.getObject("created_at", OffsetDateTime.class)
+        );
+    }
+
+    private KnowledgeSearchCandidate mapSearchCandidate(java.sql.ResultSet rs) throws java.sql.SQLException {
+        java.sql.Array sqlArray = rs.getArray("embedding");
+        float[] embedding = null;
+        if (sqlArray != null) {
+            Object[] values = (Object[]) sqlArray.getArray();
+            embedding = new float[values.length];
+            for (int index = 0; index < values.length; index++) {
+                embedding[index] = ((Number) values[index]).floatValue();
+            }
+        }
+        return new KnowledgeSearchCandidate(
+                rs.getObject("id", UUID.class), rs.getObject("document_id", UUID.class),
+                rs.getObject("file_id", UUID.class), rs.getString("original_name"),
+                rs.getString("content"), rs.getObject("page_number", Integer.class),
+                rs.getString("title_path"), rs.getDouble("keyword_score"), embedding
         );
     }
 }

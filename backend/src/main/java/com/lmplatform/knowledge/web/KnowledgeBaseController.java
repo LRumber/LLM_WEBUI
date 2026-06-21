@@ -5,7 +5,10 @@ import com.lmplatform.knowledge.model.KnowledgeBaseRequest;
 import com.lmplatform.knowledge.model.KnowledgeBaseSummary;
 import com.lmplatform.knowledge.model.KnowledgeDocumentRequest;
 import com.lmplatform.knowledge.model.KnowledgeDocumentSummary;
+import com.lmplatform.knowledge.model.KnowledgeSearchRequest;
+import com.lmplatform.knowledge.model.KnowledgeSearchResult;
 import com.lmplatform.knowledge.service.KnowledgeBaseService;
+import com.lmplatform.knowledge.service.KnowledgeSearchService;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.List;
@@ -27,10 +30,16 @@ public class KnowledgeBaseController {
 
     private final KnowledgeBaseService service;
     private final ConversationRepository users;
+    private final KnowledgeSearchService searchService;
 
-    public KnowledgeBaseController(KnowledgeBaseService service, ConversationRepository users) {
+    public KnowledgeBaseController(
+            KnowledgeBaseService service,
+            ConversationRepository users,
+            KnowledgeSearchService searchService
+    ) {
         this.service = service;
         this.users = users;
+        this.searchService = searchService;
     }
 
     @GetMapping
@@ -89,5 +98,18 @@ public class KnowledgeBaseController {
     ) {
         service.removeDocument(knowledgeBaseId, documentId, users.ensureDevelopmentUser());
         return ResponseEntity.noContent().build();
+    }
+
+    /** Exposes transparent retrieval scores for tuning before chat RAG integration. */
+    @PostMapping("/{knowledgeBaseId}/search")
+    public List<KnowledgeSearchResult> search(
+            @PathVariable UUID knowledgeBaseId,
+            @Valid @RequestBody KnowledgeSearchRequest request
+    ) {
+        long userId = users.ensureDevelopmentUser();
+        service.find(knowledgeBaseId, userId);
+        return searchService.search(
+                knowledgeBaseId, userId, request.query(), request.resolvedTopK()
+        );
     }
 }

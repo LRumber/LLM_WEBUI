@@ -45,6 +45,20 @@ button:disabled { cursor: not-allowed; }
 .knowledge-toolbar span { color: #8a928e; font-size: 12px; }
 .knowledge-toolbar input { display: none; }
 .knowledge-toolbar > button, .knowledge-empty-documents button, .knowledge-empty-page button { color: #ffffff; background: #2e7259; border-color: #2e7259; }
+.knowledge-search-test { margin-bottom: 22px; padding: 16px; background: #ffffff; border: 1px solid #e0e5e2; border-radius: 11px; }
+.knowledge-search-test header div { display: flex; align-items: baseline; gap: 9px; }
+.knowledge-search-test header span { color: #8a928e; font-size: 11px; }
+.knowledge-search-test form { display: flex; gap: 8px; margin-top: 12px; }
+.knowledge-search-test form input { min-width: 0; height: 36px; flex: 1; padding: 0 11px; border: 1px solid #d9dfdc; border-radius: 8px; }
+.knowledge-search-test form input:focus { outline: 2px solid rgba(46, 114, 89, .13); border-color: #72a28f; }
+.knowledge-search-test form button { padding: 0 14px; color: #ffffff; background: #2e7259; border: 0; border-radius: 8px; }
+.knowledge-search-results { display: grid; gap: 8px; margin-top: 13px; }
+.knowledge-search-results article { padding: 11px 12px; background: #f8faf9; border-left: 2px solid #89b5a3; border-radius: 5px; }
+.knowledge-search-results article > div { display: flex; justify-content: space-between; gap: 16px; }
+.knowledge-search-results article strong { font-size: 12px; }
+.knowledge-search-results article span, .knowledge-search-results article small { color: #7f8984; font-size: 10px; }
+.knowledge-search-results article p { max-height: 90px; overflow: hidden; margin: 7px 0; color: #555f5a; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.knowledge-search-empty { margin: 12px 0 0; color: #929a96; font-size: 11px; text-align: center; }
 .knowledge-document-list { display: grid; gap: 9px; }
 .knowledge-document-card { display: flex; align-items: center; gap: 12px; padding: 13px 14px; background: #ffffff; border: 1px solid #e0e5e2; border-radius: 11px; box-shadow: 0 2px 8px rgba(34, 69, 56, .035); }
 .knowledge-file-icon { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; color: #39735d; background: #edf5f1; border-radius: 9px; }

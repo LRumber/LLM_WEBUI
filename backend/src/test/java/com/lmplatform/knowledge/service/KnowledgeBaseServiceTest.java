@@ -11,6 +11,7 @@ import com.lmplatform.knowledge.model.KnowledgeBaseSummary;
 import com.lmplatform.knowledge.repository.KnowledgeBaseRepository;
 import java.time.OffsetDateTime;
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +52,33 @@ class KnowledgeBaseServiceTest {
         when(repository.listAccessible(9L)).thenReturn(java.util.List.of(summary));
 
         assertThat(new KnowledgeBaseService(repository).list(9L)).containsExactly(summary);
+    }
+
+    @Test
+    void attachesOnlyRepositoryAuthorizedDocument() {
+        KnowledgeBaseRepository repository = mock(KnowledgeBaseRepository.class);
+        UUID baseId = UUID.randomUUID();
+        UUID fileId = UUID.randomUUID();
+        var document = new com.lmplatform.knowledge.model.KnowledgeDocumentSummary(
+                UUID.randomUUID(), fileId, "guide.pdf", "application/pdf", 12L,
+                "ready", "waiting_parse", 0, null, OffsetDateTime.now()
+        );
+        when(repository.attachDocument(baseId, fileId, 9L)).thenReturn(Optional.of(document));
+
+        assertThat(new KnowledgeBaseService(repository).attachDocument(baseId, fileId, 9L))
+                .isEqualTo(document);
+    }
+
+    @Test
+    void verifiesMembershipBeforeListingDocuments() {
+        KnowledgeBaseRepository repository = mock(KnowledgeBaseRepository.class);
+        UUID baseId = UUID.randomUUID();
+        KnowledgeBaseSummary base = summary(baseId, "资料");
+        when(repository.findAccessible(baseId, 9L)).thenReturn(Optional.of(base));
+        when(repository.listDocuments(baseId, 9L)).thenReturn(List.of());
+
+        assertThat(new KnowledgeBaseService(repository).listDocuments(baseId, 9L)).isEmpty();
+        verify(repository).findAccessible(baseId, 9L);
     }
 
     private KnowledgeBaseSummary summary(UUID id, String name) {

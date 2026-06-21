@@ -14,4 +14,9 @@ public class KnowledgeBaseExceptionHandler {
     public ResponseEntity<Map<String, String>> notFound() {
         return ResponseEntity.status(404).body(Map.of("message", "Knowledge base not found"));
     }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> badRequest(IllegalArgumentException exception) {
+        return ResponseEntity.badRequest().body(Map.of("message", exception.getMessage()));
+    }
 }

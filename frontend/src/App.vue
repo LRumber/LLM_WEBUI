@@ -6,6 +6,7 @@ import {
 } from 'element-plus'
 import { marked } from 'marked'
 import AdminDashboard from './AdminDashboard.vue'
+import KnowledgeBasePage from './KnowledgeBasePage.vue'
 import { groupConversations, type ConversationSummary } from './conversationHistory'
 import { assessFileCompatibility } from './fileCompatibility'
 import {
@@ -138,7 +139,8 @@ const downloadAttachment = async (file: UploadedFile) => {
 }
 
 // Page and conversation state stays local; durable data always comes from Spring Boot.
-const isWorkspace = computed(() => window.location.pathname.startsWith('/app'))
+const isKnowledge = computed(() => window.location.pathname.startsWith('/app/knowledge'))
+const isWorkspace = computed(() => window.location.pathname.startsWith('/app') && !isKnowledge.value)
 const isAdmin = computed(() => window.location.pathname.startsWith('/admin'))
 const prompt = ref('')
 const models = ref<ModelInfo[]>([])
@@ -683,6 +685,7 @@ onMounted(() => {
 
 <template>
   <AdminDashboard v-if="isAdmin" />
+  <KnowledgeBasePage v-else-if="isKnowledge" />
   <!-- Authentication entry screen. -->
   <main v-else-if="!isWorkspace" class="login-page">
     <section class="login-panel" aria-labelledby="login-title">
@@ -717,8 +720,8 @@ onMounted(() => {
       </button>
 
       <nav class="main-nav" aria-label="主导航">
-        <a class="nav-item active" href="#"><Bot :size="18" />对话</a>
-        <a class="nav-item" href="#"><Library :size="18" />知识库</a>
+        <a class="nav-item active" href="/app"><Bot :size="18" />对话</a>
+        <a class="nav-item" href="/app/knowledge"><Library :size="18" />知识库</a>
         <a class="nav-item" href="#"><Users :size="18" />团队空间</a>
         <a class="nav-item" href="#"><Archive :size="18" />智能应用</a>
       </nav>

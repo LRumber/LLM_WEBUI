@@ -3,6 +3,8 @@ package com.lmplatform.knowledge.web;
 import com.lmplatform.chat.repository.ConversationRepository;
 import com.lmplatform.knowledge.model.KnowledgeBaseRequest;
 import com.lmplatform.knowledge.model.KnowledgeBaseSummary;
+import com.lmplatform.knowledge.model.KnowledgeDocumentRequest;
+import com.lmplatform.knowledge.model.KnowledgeDocumentSummary;
 import com.lmplatform.knowledge.service.KnowledgeBaseService;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -59,6 +61,33 @@ public class KnowledgeBaseController {
     @DeleteMapping("/{knowledgeBaseId}")
     public ResponseEntity<Void> delete(@PathVariable UUID knowledgeBaseId) {
         service.delete(knowledgeBaseId, users.ensureDevelopmentUser());
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/{knowledgeBaseId}/documents")
+    public List<KnowledgeDocumentSummary> documents(@PathVariable UUID knowledgeBaseId) {
+        return service.listDocuments(knowledgeBaseId, users.ensureDevelopmentUser());
+    }
+
+    @PostMapping("/{knowledgeBaseId}/documents")
+    public ResponseEntity<KnowledgeDocumentSummary> attachDocument(
+            @PathVariable UUID knowledgeBaseId,
+            @Valid @RequestBody KnowledgeDocumentRequest request
+    ) {
+        KnowledgeDocumentSummary document = service.attachDocument(
+                knowledgeBaseId, request.fileId(), users.ensureDevelopmentUser()
+        );
+        return ResponseEntity.created(URI.create(
+                "/api/knowledge-bases/" + knowledgeBaseId + "/documents/" + document.id()
+        )).body(document);
+    }
+
+    @DeleteMapping("/{knowledgeBaseId}/documents/{documentId}")
+    public ResponseEntity<Void> removeDocument(
+            @PathVariable UUID knowledgeBaseId,
+            @PathVariable UUID documentId
+    ) {
+        service.removeDocument(knowledgeBaseId, documentId, users.ensureDevelopmentUser());
         return ResponseEntity.noContent().build();
     }
 }

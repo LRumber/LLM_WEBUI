@@ -2,6 +2,7 @@ package com.lmplatform.knowledge.service;
 
 import com.lmplatform.knowledge.model.KnowledgeBaseRequest;
 import com.lmplatform.knowledge.model.KnowledgeBaseSummary;
+import com.lmplatform.knowledge.model.KnowledgeDocumentSummary;
 import com.lmplatform.knowledge.repository.KnowledgeBaseRepository;
 import java.util.List;
 import java.util.UUID;
@@ -44,6 +45,25 @@ public class KnowledgeBaseService {
 
     public void delete(UUID knowledgeBaseId, long userId) {
         if (!repository.softDeleteOwned(knowledgeBaseId, userId)) {
+            throw new KnowledgeBaseNotFoundException(knowledgeBaseId);
+        }
+    }
+
+    public List<KnowledgeDocumentSummary> listDocuments(UUID knowledgeBaseId, long userId) {
+        // Resolve the space first so an inaccessible and an empty knowledge base behave differently internally.
+        find(knowledgeBaseId, userId);
+        return repository.listDocuments(knowledgeBaseId, userId);
+    }
+
+    public KnowledgeDocumentSummary attachDocument(UUID knowledgeBaseId, UUID fileId, long userId) {
+        return repository.attachDocument(knowledgeBaseId, fileId, userId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Document must be an owned file and the knowledge base must be editable"
+                ));
+    }
+
+    public void removeDocument(UUID knowledgeBaseId, UUID documentId, long userId) {
+        if (!repository.removeDocument(knowledgeBaseId, documentId, userId)) {
             throw new KnowledgeBaseNotFoundException(knowledgeBaseId);
         }
     }

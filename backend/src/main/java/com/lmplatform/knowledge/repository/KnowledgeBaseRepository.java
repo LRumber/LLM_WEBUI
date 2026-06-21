@@ -1,6 +1,7 @@
 package com.lmplatform.knowledge.repository;
 
 import com.lmplatform.knowledge.model.KnowledgeBaseSummary;
+import com.lmplatform.knowledge.model.KnowledgeDocumentSummary;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -82,6 +83,59 @@ public class KnowledgeBaseRepository {
                 """, knowledgeBaseId, userId) == 1;
     }
 
+    /** Lists documents only through an authorized membership join. */
+    public List<KnowledgeDocumentSummary> listDocuments(UUID knowledgeBaseId, long userId) {
+        return jdbc.query("""
+                SELECT kd.id, kd.file_id, fa.original_name, fa.media_type, fa.size_bytes,
+                       fa.status AS file_status, kd.status, kd.chunk_count,
+                       COALESCE(kd.error_message, fa.error_message) AS error_message, kd.created_at
+                FROM knowledge_document kd
+                JOIN knowledge_base kb ON kb.id = kd.knowledge_base_id AND kb.status = 'active'
+                JOIN knowledge_member km ON km.knowledge_base_id = kb.id AND km.user_id = ?
+                JOIN file_asset fa ON fa.id = kd.file_id
+                WHERE kd.knowledge_base_id = ? AND kd.status <> 'superseded'
+                ORDER BY kd.created_at DESC
+                """, (rs, rowNum) -> mapDocument(rs), userId, knowledgeBaseId);
+    }
+
+    /** Adds only a file owned by the caller to a space where they can edit documents. */
+    @Transactional
+    public Optional<KnowledgeDocumentSummary> attachDocument(
+            UUID knowledgeBaseId, UUID fileId, long userId
+    ) {
+        List<KnowledgeDocumentSummary> existing = listDocuments(knowledgeBaseId, userId).stream()
+                .filter(document -> document.fileId().equals(fileId)).toList();
+        if (!existing.isEmpty()) return Optional.of(existing.getFirst());
+
+        UUID documentId = UUID.randomUUID();
+        int inserted = jdbc.update("""
+                INSERT INTO knowledge_document (id, knowledge_base_id, file_id, version)
+                SELECT ?, kb.id, fa.id, 1
+                FROM knowledge_base kb
+                JOIN knowledge_member km ON km.knowledge_base_id = kb.id AND km.user_id = ?
+                JOIN file_asset fa ON fa.id = ? AND fa.owner_user_id = ?
+                WHERE kb.id = ? AND kb.status = 'active'
+                  AND km.member_role IN ('owner', 'admin', 'editor')
+                  AND fa.asset_kind = 'document'
+                """, documentId, userId, fileId, userId, knowledgeBaseId);
+        if (inserted != 1) return Optional.empty();
+        return listDocuments(knowledgeBaseId, userId).stream()
+                .filter(document -> document.id().equals(documentId)).findFirst();
+    }
+
+    /** Removes a document from retrieval without deleting the owner's original MinIO file. */
+    public boolean removeDocument(UUID knowledgeBaseId, UUID documentId, long userId) {
+        return jdbc.update("""
+                UPDATE knowledge_document kd SET status = 'superseded', updated_at = CURRENT_TIMESTAMP
+                FROM knowledge_member km, knowledge_base kb
+                WHERE kd.id = ? AND kd.knowledge_base_id = ?
+                  AND km.knowledge_base_id = kd.knowledge_base_id AND km.user_id = ?
+                  AND km.member_role IN ('owner', 'admin', 'editor')
+                  AND kb.id = kd.knowledge_base_id AND kb.status = 'active'
+                  AND kd.status <> 'superseded'
+                """, documentId, knowledgeBaseId, userId) == 1;
+    }
+
     private KnowledgeBaseSummary mapSummary(java.sql.ResultSet rs) throws java.sql.SQLException {
         return new KnowledgeBaseSummary(
                 rs.getObject("id", UUID.class),
@@ -93,6 +147,17 @@ public class KnowledgeBaseRepository {
                 rs.getInt("document_count"),
                 rs.getObject("created_at", OffsetDateTime.class),
                 rs.getObject("updated_at", OffsetDateTime.class)
+        );
+    }
+
+    private KnowledgeDocumentSummary mapDocument(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return new KnowledgeDocumentSummary(
+                rs.getObject("id", UUID.class), rs.getObject("file_id", UUID.class),
+                rs.getString("original_name"), rs.getString("media_type"),
+                rs.getLong("size_bytes"), rs.getString("file_status"),
+                rs.getString("status"), rs.getInt("chunk_count"),
+                rs.getString("error_message"),
+                rs.getObject("created_at", OffsetDateTime.class)
         );
     }
 }

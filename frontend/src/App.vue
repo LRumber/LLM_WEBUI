@@ -14,6 +14,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronRight,
   Copy,
   Database,
   Download,
@@ -48,6 +49,9 @@ interface ChatMessage {
   error?: boolean
   editedAt?: string | null
   attachments?: UploadedFile[]
+  reasoningContent?: string
+  reasoningDurationMs?: number | null
+  reasoningExpanded?: boolean
 }
 
 /** Model registration exposed through the Java proxy. */
@@ -59,7 +63,7 @@ interface ModelInfo {
 
 /** Normalized event emitted by Spring Boot while forwarding an AI response. */
 interface StreamEvent {
-  type: 'metadata' | 'delta' | 'usage' | 'done' | 'error'
+  type: 'metadata' | 'reasoning_delta' | 'reasoning_done' | 'delta' | 'usage' | 'done' | 'error'
   content?: string
   message?: string
   conversation_id?: string
@@ -67,6 +71,7 @@ interface StreamEvent {
   prompt_tokens?: number
   completion_tokens?: number
   total_tokens?: number
+  duration_ms?: number
 }
 
 /** Persisted message returned when restoring an existing conversation. */
@@ -79,6 +84,8 @@ interface PersistedMessage {
   outputTokens: number
   editedAt?: string | null
   attachments?: UploadedFile[]
+  reasoningContent?: string | null
+  reasoningDurationMs?: number | null
 }
 
 interface PromptTemplate {
@@ -107,6 +114,12 @@ const attachmentTagType = (status: UploadedFile['status']) => {
   if (status === 'ready') return 'success'
   if (status === 'failed') return 'danger'
   return 'warning'
+}
+
+/** Formats persisted reasoning latency as a compact human-readable duration. */
+const formatReasoningDuration = (durationMs?: number | null) => {
+  if (!durationMs) return '正在思考…'
+  return `已思考 ${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)} 秒`
 }
 
 /** Downloads an owned attachment through the backend without exposing MinIO credentials. */
@@ -380,6 +393,9 @@ const openConversation = async (conversation: ConversationSummary, forceBottom =
       error: message.status === 'failed',
       editedAt: message.editedAt,
       attachments: message.attachments ?? [],
+      reasoningContent: message.reasoningContent ?? '',
+      reasoningDurationMs: message.reasoningDurationMs,
+      reasoningExpanded: false,
     }))
   const lastAssistant = [...persisted].reverse().find((message) => message.role === 'assistant')
   usage.value = lastAssistant
@@ -519,7 +535,12 @@ const applyStreamEvent = (event: StreamEvent, assistantIndex: number) => {
   if (event.type === 'metadata' && event.conversation_id) {
     conversationId.value = event.conversation_id
   }
-  if (event.type === 'delta' && event.content) {
+  if (event.type === 'reasoning_delta' && event.content) {
+    assistant.reasoningContent = (assistant.reasoningContent ?? '') + event.content
+    scrollToBottom()
+  } else if (event.type === 'reasoning_done') {
+    assistant.reasoningDurationMs = event.duration_ms ?? null
+  } else if (event.type === 'delta' && event.content) {
     assistant.content += event.content
     scrollToBottom()
   } else if (event.type === 'usage') {
@@ -570,7 +591,9 @@ const sendPrompt = async (preset?: string) => {
   const attachmentIds = sentAttachments.map((file) => file.id)
 
   const userMessage: ChatMessage = { role: 'user', content, attachments: sentAttachments }
-  const assistantMessage: ChatMessage = { role: 'assistant', content: '' }
+  const assistantMessage: ChatMessage = {
+    role: 'assistant', content: '', reasoningContent: '', reasoningExpanded: false,
+  }
   messages.value.push(userMessage, assistantMessage)
   const assistantIndex = messages.value.length - 1
   prompt.value = ''
@@ -856,6 +879,14 @@ onMounted(() => {
                     <ElTag :type="attachmentTagType(file.status)" effect="light" size="small" round>{{ attachmentStatusLabel(file.status) }}</ElTag>
                     <Download class="attachment-download-icon" :size="15" />
                   </button>
+                </div>
+                <div v-if="message.role === 'assistant' && message.reasoningContent" class="reasoning-panel">
+                  <button type="button" class="reasoning-toggle" @click="message.reasoningExpanded = !message.reasoningExpanded">
+                    <ChevronDown v-if="message.reasoningExpanded" :size="14" />
+                    <ChevronRight v-else :size="14" />
+                    <span>{{ formatReasoningDuration(message.reasoningDurationMs) }}</span>
+                  </button>
+                  <div v-if="message.reasoningExpanded" class="reasoning-content">{{ message.reasoningContent }}</div>
                 </div>
                 <div v-if="message.content && message.role === 'assistant'" class="markdown-body" v-html="renderMarkdown(message.content)"></div>
                 <p v-else-if="message.content">{{ message.content }}</p>

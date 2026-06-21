@@ -220,9 +220,11 @@ public class ConversationRepository {
         jdbc.update("""
                 INSERT INTO conversation_message (
                     id, conversation_id, sequence_no, role, content, status,
-                    input_tokens, output_tokens, error_code, created_at, updated_at
+                    input_tokens, output_tokens, reasoning_content, reasoning_duration_ms,
+                    error_code, created_at, updated_at
                 ) SELECT gen_random_uuid(), ?, sequence_no, role, content, status,
-                         input_tokens, output_tokens, error_code, created_at, updated_at
+                         input_tokens, output_tokens, reasoning_content, reasoning_duration_ms,
+                         error_code, created_at, updated_at
                   FROM conversation_message
                  WHERE conversation_id = ? AND sequence_no <= ? AND superseded_at IS NULL
                  ORDER BY sequence_no
@@ -352,14 +354,18 @@ public class ConversationRepository {
             String status,
             int inputTokens,
             int outputTokens,
+            String reasoningContent,
+            Integer reasoningDurationMs,
             String errorCode
     ) {
         jdbc.update("""
                 UPDATE conversation_message
-                SET content = ?, status = ?, input_tokens = ?, output_tokens = ?, error_code = ?,
+                SET content = ?, status = ?, input_tokens = ?, output_tokens = ?,
+                    reasoning_content = ?, reasoning_duration_ms = ?, error_code = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-                """, content, status, inputTokens, outputTokens, errorCode, messageId);
+                """, content, status, inputTokens, outputTokens,
+                reasoningContent, reasoningDurationMs, errorCode, messageId);
         jdbc.update("""
                 UPDATE conversation
                 SET message_count = (
@@ -502,6 +508,7 @@ public class ConversationRepository {
     public List<ConversationMessage> listMessages(UUID conversationId, long userId) {
         List<ConversationMessage> messages = jdbc.query("""
                 SELECT cm.id, cm.role, cm.content, cm.status, cm.input_tokens, cm.output_tokens,
+                       cm.reasoning_content, cm.reasoning_duration_ms,
                        cm.created_at, cm.edited_at
                 FROM conversation_message cm
                 JOIN conversation c ON c.id = cm.conversation_id
@@ -515,6 +522,8 @@ public class ConversationRepository {
                 rs.getString("status"),
                 rs.getInt("input_tokens"),
                 rs.getInt("output_tokens"),
+                rs.getString("reasoning_content"),
+                rs.getObject("reasoning_duration_ms", Integer.class),
                 rs.getObject("created_at", OffsetDateTime.class),
                 rs.getObject("edited_at", OffsetDateTime.class),
                 List.of()
@@ -538,7 +547,9 @@ public class ConversationRepository {
         }, conversationId, userId);
         return messages.stream().map(message -> new ConversationMessage(
                 message.id(), message.role(), message.content(), message.status(),
-                message.inputTokens(), message.outputTokens(), message.createdAt(), message.editedAt(),
+                message.inputTokens(), message.outputTokens(),
+                message.reasoningContent(), message.reasoningDurationMs(),
+                message.createdAt(), message.editedAt(),
                 List.copyOf(attachments.getOrDefault(message.id(), List.of()))
         )).toList();
     }

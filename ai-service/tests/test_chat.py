@@ -15,6 +15,7 @@ from app.models import ChatMessage, ChatRequest, ModelCapability, ModelEndpoint
 async def test_chat_gateway_translates_openai_stream():
     """Ensure provider chunks become ordered platform delta, usage, and done events."""
     upstream_events = [
+        {"choices": [{"delta": {"reasoning_content": "先分析"}}]},
         {"choices": [{"delta": {"content": "你"}}]},
         {"choices": [{"delta": {"content": "好"}}]},
         {
@@ -51,6 +52,7 @@ async def test_chat_gateway_translates_openai_stream():
     events = [event async for event in gateway.stream(chat_request, model)]
 
     assert events == [
+        {"type": "reasoning_delta", "content": "先分析"},
         {"type": "delta", "content": "你"},
         {"type": "delta", "content": "好"},
         {

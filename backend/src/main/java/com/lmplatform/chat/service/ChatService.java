@@ -125,9 +125,12 @@ public class ChatService {
         ));
 
         StringBuilder assistantContent = new StringBuilder();
+        StringBuilder reasoningContent = new StringBuilder();
         AtomicInteger inputTokens = new AtomicInteger();
         AtomicInteger outputTokens = new AtomicInteger();
+        AtomicInteger reasoningDurationMs = new AtomicInteger();
         AtomicLong firstTokenAt = new AtomicLong();
+        AtomicLong reasoningStartedAt = new AtomicLong();
         long startedAt = System.nanoTime();
 
         try {
@@ -135,7 +138,11 @@ public class ChatService {
                     model,
                     buildModelMessages(conversationId),
                     thinkingEnabled,
-                    event -> handleAiEvent(event, output, assistantContent, inputTokens, outputTokens, firstTokenAt)
+                    event -> handleAiEvent(
+                            event, output, assistantContent, reasoningContent,
+                            inputTokens, outputTokens, firstTokenAt, reasoningStartedAt,
+                            reasoningDurationMs, startedAt
+                    )
             );
             int durationMs = elapsedMs(startedAt);
             Integer firstTokenMs = firstTokenAt.get() == 0
@@ -147,6 +154,8 @@ public class ChatService {
                     "completed",
                     inputTokens.get(),
                     outputTokens.get(),
+                    reasoningContent.isEmpty() ? null : reasoningContent.toString(),
+                    reasoningDurationMs.get() == 0 ? null : reasoningDurationMs.get(),
                     null
             );
             repository.recordCompletedUsage(
@@ -173,7 +182,10 @@ public class ChatService {
             String status = assistantContent.isEmpty() ? "failed" : "interrupted";
             repository.finishAssistantMessage(
                     assistantMessageId, assistantContent.toString(), status,
-                    inputTokens.get(), outputTokens.get(), "stream_error"
+                    inputTokens.get(), outputTokens.get(),
+                    reasoningContent.isEmpty() ? null : reasoningContent.toString(),
+                    reasoningDurationMs.get() == 0 ? null : reasoningDurationMs.get(),
+                    "stream_error"
             );
             try {
                 writeEvent(output, Map.of("type", "error", "message", safeMessage(exception)));
@@ -219,13 +231,24 @@ public class ChatService {
             JsonNode event,
             OutputStream output,
             StringBuilder assistantContent,
+            StringBuilder reasoningContent,
             AtomicInteger inputTokens,
             AtomicInteger outputTokens,
-            AtomicLong firstTokenAt
+            AtomicLong firstTokenAt,
+            AtomicLong reasoningStartedAt,
+            AtomicInteger reasoningDurationMs,
+            long requestStartedAt
     ) throws IOException {
         // Keep accounting state beside the stream while forwarding the original normalized event.
         String type = event.path("type").asText();
-        if ("delta".equals(type)) {
+        if ("reasoning_delta".equals(type)) {
+            String content = event.path("content").asText();
+            if (!content.isEmpty()) {
+                reasoningStartedAt.compareAndSet(0, requestStartedAt);
+                reasoningContent.append(content);
+            }
+        } else if ("delta".equals(type)) {
+            finishReasoning(output, reasoningStartedAt, reasoningDurationMs);
             String content = event.path("content").asText();
             if (!content.isEmpty()) {
                 firstTokenAt.compareAndSet(0, System.nanoTime());
@@ -236,8 +259,26 @@ public class ChatService {
             outputTokens.set(event.path("completion_tokens").asInt());
         } else if ("error".equals(type)) {
             throw new IOException(event.path("message").asText("AI service failed"));
+        } else if ("done".equals(type)) {
+            finishReasoning(output, reasoningStartedAt, reasoningDurationMs);
         }
         writeEvent(output, objectMapper.convertValue(event, Map.class));
+    }
+
+    /** Emits one stable completion marker when reasoning transitions into the final answer. */
+    private void finishReasoning(
+            OutputStream output,
+            AtomicLong reasoningStartedAt,
+            AtomicInteger reasoningDurationMs
+    ) throws IOException {
+        if (reasoningStartedAt.get() == 0 || reasoningDurationMs.get() != 0) {
+            return;
+        }
+        int duration = (int) ((System.nanoTime() - reasoningStartedAt.get()) / 1_000_000);
+        reasoningDurationMs.compareAndSet(0, Math.max(1, duration));
+        writeEvent(output, Map.of(
+                "type", "reasoning_done", "duration_ms", reasoningDurationMs.get()
+        ));
     }
 
     private void writeEvent(OutputStream output, Map<String, ?> event) throws IOException {

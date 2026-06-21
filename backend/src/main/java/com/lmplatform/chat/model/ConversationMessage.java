@@ -12,6 +12,8 @@ public record ConversationMessage(
         String status,
         int inputTokens,
         int outputTokens,
+        String reasoningContent,
+        Integer reasoningDurationMs,
         OffsetDateTime createdAt,
         OffsetDateTime editedAt,
         List<ConversationAttachment> attachments

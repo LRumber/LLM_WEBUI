@@ -61,6 +61,7 @@ class ChatServiceTest {
 
         doAnswer(invocation -> {
             AiServiceClient.EventConsumer consumer = invocation.getArgument(3);
+            consumer.accept(objectMapper.readTree("{\"type\":\"reasoning_delta\",\"content\":\"先分析\"}"));
             consumer.accept(objectMapper.readTree("{\"type\":\"delta\",\"content\":\"你\"}"));
             consumer.accept(objectMapper.readTree("{\"type\":\"delta\",\"content\":\"好\"}"));
             consumer.accept(objectMapper.readTree("""
@@ -77,9 +78,13 @@ class ChatServiceTest {
 
         String stream = output.toString(StandardCharsets.UTF_8);
         assertThat(stream).contains("metadata", conversationId.toString(), "\"content\":\"你\"");
-        assertThat(stream).contains("\"total_tokens\":5", "\"type\":\"done\"");
+        assertThat(stream).contains(
+                "\"type\":\"reasoning_delta\"", "\"type\":\"reasoning_done\"",
+                "\"total_tokens\":5", "\"type\":\"done\""
+        );
         verify(repository).finishAssistantMessage(
-                assistantMessageId, "你好", "completed", 3, 2, null
+                eq(assistantMessageId), eq("你好"), eq("completed"), eq(3), eq(2),
+                eq("先分析"), anyInt(), eq(null)
         );
         verify(repository).appendMessage(conversationId, "system", "Be precise", "completed");
         verify(repository).recordCompletedUsage(
@@ -121,7 +126,7 @@ class ChatServiceTest {
         );
 
         verify(repository).finishAssistantMessage(
-                replacementId, "新回答", "completed", 0, 0, null
+                replacementId, "新回答", "completed", 0, 0, null, null, null
         );
         verify(repository).recordCompletedUsage(
                 any(UUID.class), eq(1L), eq(conversationId), eq("deepseek-chat"),

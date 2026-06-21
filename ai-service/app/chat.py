@@ -100,7 +100,15 @@ class ChatGateway:
                     chunk = json.loads(data)
                     choices = chunk.get("choices") or []
                     if choices:
-                        content = choices[0].get("delta", {}).get("content")
+                        delta = choices[0].get("delta", {})
+                        reasoning = (
+                            delta.get("reasoning_content")
+                            or delta.get("reasoning")
+                            or delta.get("analysis")
+                        )
+                        if reasoning:
+                            yield {"type": "reasoning_delta", "content": reasoning}
+                        content = delta.get("content")
                         if content:
                             yield {"type": "delta", "content": content}
 

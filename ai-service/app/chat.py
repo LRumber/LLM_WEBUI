@@ -69,7 +69,7 @@ class ChatGateway:
         """Call an upstream endpoint after the per-model concurrency slot is acquired."""
         api_key = self._api_key_for(model)
         payload = {
-            "model": model.model_name,
+            "model": self._upstream_model_name(request, model),
             "messages": [message.model_dump() for message in request.messages],
             "temperature": request.temperature,
             "stream": True,
@@ -122,6 +122,18 @@ class ChatGateway:
                         }
 
         yield {"type": "done"}
+
+    def _upstream_model_name(self, request: ChatRequest, model: ModelEndpoint) -> str:
+        """Select the provider's reasoning variant without changing the frontend model entry."""
+        # DeepSeek exposes reasoning as a separate model instead of honoring enable_thinking
+        # on deepseek-chat. Keep one frontend model and switch only the upstream model id.
+        if (
+            request.thinking_enabled
+            and model.provider.lower() == "deepseek"
+            and model.model_name == "deepseek-chat"
+        ):
+            return "deepseek-reasoner"
+        return model.model_name
 
     async def health(self, model: ModelEndpoint) -> dict:
         """Probe the OpenAI-compatible model listing endpoint and normalize latency and errors."""

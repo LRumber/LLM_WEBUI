@@ -30,7 +30,9 @@ async def test_chat_gateway_translates_openai_stream():
         """Act as a deterministic DeepSeek-compatible streaming endpoint."""
         assert request.headers["Authorization"] == "Bearer test-key"
         assert request.url.path == "/chat/completions"
-        assert json.loads(request.content)["enable_thinking"] is True
+        payload = json.loads(request.content)
+        assert payload["enable_thinking"] is True
+        assert payload["model"] == "deepseek-reasoner"
         return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
 
     settings = Settings(deepseek_api_key=SecretStr("test-key"))
@@ -63,3 +65,24 @@ async def test_chat_gateway_translates_openai_stream():
         },
         {"type": "done"},
     ]
+
+
+def test_chat_gateway_keeps_chat_model_for_fast_answers():
+    """Keep the configured DeepSeek chat model when reasoning is disabled."""
+    settings = Settings(deepseek_api_key=SecretStr("test-key"))
+    gateway = ChatGateway(settings)
+    model = ModelEndpoint(
+        key="deepseek-chat",
+        display_name="DeepSeek Chat",
+        provider="deepseek",
+        base_url="https://api.deepseek.com",
+        model_name="deepseek-chat",
+        capabilities={ModelCapability.CHAT},
+    )
+    request = ChatRequest(
+        model="deepseek-chat",
+        messages=[ChatMessage(role="user", content="hello")],
+        thinking_enabled=False,
+    )
+
+    assert gateway._upstream_model_name(request, model) == "deepseek-chat"

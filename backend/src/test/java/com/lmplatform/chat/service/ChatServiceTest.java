@@ -14,11 +14,13 @@ import com.lmplatform.chat.client.AiServiceClient;
 import com.lmplatform.chat.config.AiServiceProperties;
 import com.lmplatform.chat.model.ChatStreamRequest;
 import com.lmplatform.chat.model.ModelContextMessage;
+import com.lmplatform.chat.model.PromptTemplate;
 import com.lmplatform.chat.repository.ConversationRepository;
 import com.lmplatform.file.service.ObjectStorageService;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -40,9 +42,16 @@ class ChatServiceTest {
         UUID conversationId = UUID.randomUUID();
         UUID userMessageId = UUID.randomUUID();
         UUID assistantMessageId = UUID.randomUUID();
+        UUID templateId = UUID.randomUUID();
 
         when(repository.ensureDevelopmentUser()).thenReturn(1L);
-        when(repository.createConversation(1L, "deepseek-chat", "你好")).thenReturn(conversationId);
+        when(repository.findPromptTemplate(templateId, 1L)).thenReturn(Optional.of(
+                new PromptTemplate(templateId, "Technical Assistant", "", "Be precise", "personal", true)
+        ));
+        when(repository.createConversation(
+                1L, "deepseek-chat", "你好", templateId, "Technical Assistant"
+        ))
+                .thenReturn(conversationId);
         when(repository.appendMessage(conversationId, "user", "你好", "completed"))
                 .thenReturn(userMessageId);
         when(repository.appendMessage(conversationId, "assistant", "", "generating"))
@@ -62,7 +71,9 @@ class ChatServiceTest {
         }).when(client).streamChat(eq("deepseek-chat"), any(), eq(true), any());
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        service.stream(new ChatStreamRequest(null, "deepseek-chat", "你好", null, List.of(), true), output);
+        service.stream(new ChatStreamRequest(
+                null, "deepseek-chat", "你好", templateId, List.of(), true
+        ), output);
 
         String stream = output.toString(StandardCharsets.UTF_8);
         assertThat(stream).contains("metadata", conversationId.toString(), "\"content\":\"你\"");
@@ -70,6 +81,7 @@ class ChatServiceTest {
         verify(repository).finishAssistantMessage(
                 assistantMessageId, "你好", "completed", 3, 2, null
         );
+        verify(repository).appendMessage(conversationId, "system", "Be precise", "completed");
         verify(repository).recordCompletedUsage(
                 any(UUID.class), eq(1L), eq(conversationId), eq("deepseek-chat"),
                 eq(3), eq(2), anyInt(), anyInt(), eq(true)

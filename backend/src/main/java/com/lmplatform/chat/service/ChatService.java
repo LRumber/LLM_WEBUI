@@ -6,6 +6,7 @@ import com.lmplatform.chat.client.AiServiceClient;
 import com.lmplatform.chat.config.AiServiceProperties;
 import com.lmplatform.chat.model.ChatStreamRequest;
 import com.lmplatform.chat.model.ModelContextMessage;
+import com.lmplatform.chat.model.PromptTemplate;
 import com.lmplatform.chat.repository.ConversationRepository;
 import com.lmplatform.file.service.ObjectStorageService;
 import java.io.IOException;
@@ -54,8 +55,15 @@ public class ChatService {
     public void stream(ChatStreamRequest request, OutputStream output) throws IOException {
         long userId = repository.ensureDevelopmentUser();
         boolean newConversation = request.conversationId() == null;
+        PromptTemplate selectedTemplate = newConversation
+                ? repository.findPromptTemplate(request.templateId(), userId).orElse(null)
+                : null;
         UUID conversationId = newConversation
-                ? repository.createConversation(userId, request.model(), request.content())
+                ? repository.createConversation(
+                        userId, request.model(), request.content(),
+                        selectedTemplate == null ? null : selectedTemplate.id(),
+                        selectedTemplate == null ? null : selectedTemplate.name()
+                )
                 : request.conversationId();
         if (!newConversation && !repository.belongsToUser(conversationId, userId)) {
             writeEvent(output, Map.of("type", "error", "message", "Conversation not found"));
@@ -64,9 +72,11 @@ public class ChatService {
 
         if (newConversation) {
             // Persist the selected system instruction so every future context reconstruction is deterministic.
-            repository.findPromptTemplate(request.templateId(), userId).ifPresent(template ->
-                    repository.appendMessage(conversationId, "system", template, "completed")
-            );
+            if (selectedTemplate != null) {
+                repository.appendMessage(
+                        conversationId, "system", selectedTemplate.systemPrompt(), "completed"
+                );
+            }
         }
         UUID userMessageId = repository.appendMessage(
                 conversationId, "user", request.content(), "completed"

@@ -42,7 +42,13 @@ public class ConversationRepository {
     }
 
     /** Creates a conversation with an immediate first-prompt title marked as temporary. */
-    public UUID createConversation(long userId, String model, String firstPrompt) {
+    public UUID createConversation(
+            long userId,
+            String model,
+            String firstPrompt,
+            UUID promptTemplateId,
+            String promptTemplateName
+    ) {
         UUID id = UUID.randomUUID();
         String title = firstPrompt.strip().replaceAll("\\s+", " ");
         if (title.length() > 60) {
@@ -50,9 +56,10 @@ public class ConversationRepository {
         }
         jdbc.update("""
                 INSERT INTO conversation (
-                    id, user_id, model_key, title, title_source, title_updated_at
-                ) VALUES (?, ?, ?, ?, 'temporary', CURRENT_TIMESTAMP)
-                """, id, userId, model, title);
+                    id, user_id, model_key, title, title_source, title_updated_at,
+                    prompt_template_id, prompt_template_name
+                ) VALUES (?, ?, ?, ?, 'temporary', CURRENT_TIMESTAMP, ?, ?)
+                """, id, userId, model, title, promptTemplateId, promptTemplateName);
         return id;
     }
 
@@ -204,9 +211,11 @@ public class ConversationRepository {
         jdbc.update("""
                 INSERT INTO conversation (
                     id, user_id, team_id, model_key, title, title_source, title_updated_at,
-                    parent_conversation_id, branch_from_message_id
+                    parent_conversation_id, branch_from_message_id,
+                    prompt_template_id, prompt_template_name
                 ) SELECT ?, user_id, team_id, model_key, title || '（分支）', 'manual',
-                         CURRENT_TIMESTAMP, id, ? FROM conversation WHERE id = ?
+                         CURRENT_TIMESTAMP, id, ?, prompt_template_id, prompt_template_name
+                  FROM conversation WHERE id = ?
                 """, branchId, messageId, conversationId);
         jdbc.update("""
                 INSERT INTO conversation_message (
@@ -322,14 +331,17 @@ public class ConversationRepository {
     }
 
     /** Resolves an enabled system or user-owned prompt without exposing another user's template. */
-    public Optional<String> findPromptTemplate(UUID templateId, long userId) {
+    public Optional<PromptTemplate> findPromptTemplate(UUID templateId, long userId) {
         if (templateId == null) {
             return Optional.empty();
         }
         return jdbc.query("""
-                SELECT system_prompt FROM prompt_template
+                SELECT id, name, description, system_prompt, scope, enabled FROM prompt_template
                 WHERE id = ? AND enabled = TRUE AND (scope = 'system' OR owner_user_id = ?)
-                """, (rs, rowNum) -> rs.getString("system_prompt"), templateId, userId)
+                """, (rs, rowNum) -> new PromptTemplate(
+                rs.getObject("id", UUID.class), rs.getString("name"), rs.getString("description"),
+                rs.getString("system_prompt"), rs.getString("scope"), rs.getBoolean("enabled")
+        ), templateId, userId)
                 .stream().findFirst();
     }
 
@@ -463,6 +475,7 @@ public class ConversationRepository {
     public List<ConversationSummary> listConversations(long userId) {
         return jdbc.query("""
                 SELECT c.id, c.title, c.model_key, c.message_count, c.created_at, c.updated_at,
+                       c.prompt_template_id, c.prompt_template_name,
                        COALESCE((
                            SELECT cm.content FROM conversation_message cm
                            WHERE cm.conversation_id = c.id AND cm.content <> ''
@@ -478,6 +491,8 @@ public class ConversationRepository {
                 rs.getString("model_key"),
                 rs.getInt("message_count"),
                 rs.getString("preview"),
+                rs.getObject("prompt_template_id", UUID.class),
+                rs.getString("prompt_template_name"),
                 rs.getObject("created_at", OffsetDateTime.class),
                 rs.getObject("updated_at", OffsetDateTime.class)
         ), userId);

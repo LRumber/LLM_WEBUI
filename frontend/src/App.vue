@@ -20,6 +20,7 @@ import {
   FileText,
   GitBranch,
   Library,
+  LockKeyhole,
   Menu,
   MessageSquarePlus,
   Mic,
@@ -166,6 +167,8 @@ const selectedModelCapabilities = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.capabilities ?? []
 })
 const selectedTemplateName = computed(() => {
+  const activeConversation = conversations.value.find((item) => item.id === conversationId.value)
+  if (conversationId.value) return activeConversation?.promptTemplateName ?? '默认提示词'
   return promptTemplates.value.find((template) => template.id === selectedTemplateId.value)?.name
     ?? '默认提示词'
 })
@@ -176,6 +179,11 @@ const conversationGroups = computed(() => {
 
 /** Applies a sidebar prompt choice; an empty command always means the platform default. */
 const selectPromptTemplate = (command: string | number | object) => {
+  if (String(command) === '__manage__') {
+    templateManagerOpen.value = true
+    return
+  }
+  if (conversationId.value) return
   selectedTemplateId.value = String(command)
 }
 
@@ -301,7 +309,7 @@ const savePromptTemplate = async () => {
   }
   const created: PromptTemplate | null = templateIdBeforeSave ? null : await response.json()
   await loadPromptTemplates()
-  selectedTemplateId.value = created?.id ?? templateIdBeforeSave ?? ''
+  if (!messages.value.length) selectedTemplateId.value = created?.id ?? templateIdBeforeSave ?? ''
   editPromptTemplate()
   templateManagerOpen.value = false
   if (messages.value.length) window.alert('模板已保存，将在下一次新建对话时生效。')
@@ -361,7 +369,7 @@ const openConversation = async (conversation: ConversationSummary, forceBottom =
   const persisted: PersistedMessage[] = await response.json()
   conversationId.value = conversation.id
   selectedModel.value = conversation.model
-  selectedTemplateId.value = ''
+  selectedTemplateId.value = conversation.promptTemplateId ?? ''
   messages.value = persisted
     .filter((message): message is PersistedMessage & { role: Role } =>
       Boolean(message.content) && message.role !== 'system')
@@ -692,26 +700,6 @@ onMounted(() => {
         <a class="nav-item" href="#"><Archive :size="18" />智能应用</a>
       </nav>
 
-      <!-- Prompt selection belongs to workspace navigation and applies only to a new conversation. -->
-      <section class="sidebar-prompt-section">
-        <div class="section-label"><span>提示词设置</span><button class="icon-button" type="button" title="管理提示词" @click="templateManagerOpen = true"><Settings :size="15" /></button></div>
-        <ElDropdown trigger="click" :disabled="messages.length > 0" @command="selectPromptTemplate">
-          <button class="sidebar-prompt-trigger" type="button">
-            <Settings :size="16" />
-            <span>{{ selectedTemplateName }}</span>
-            <ChevronDown :size="15" />
-          </button>
-          <template #dropdown>
-            <ElDropdownMenu>
-              <ElDropdownItem command=""><span class="prompt-option"><strong>默认提示词</strong><small>通用</small></span></ElDropdownItem>
-              <ElDropdownItem v-for="template in promptTemplates" :key="template.id" :command="template.id">
-                <span class="prompt-option"><strong>{{ template.name }}</strong><ElTag :type="template.scope === 'system' ? 'info' : 'success'" effect="plain" size="small">{{ template.scope === 'system' ? '系统' : '个人' }}</ElTag></span>
-              </ElDropdownItem>
-            </ElDropdownMenu>
-          </template>
-        </ElDropdown>
-      </section>
-
       <div class="history-section">
         <!-- Persisted conversations support search, grouping, selection, rename, and soft deletion. -->
         <div class="section-label">
@@ -793,7 +781,8 @@ onMounted(() => {
       <!-- Model selection and service health. -->
       <header class="topbar">
         <button class="icon-button mobile-only" title="打开菜单" @click="sidebarOpen = true"><Menu :size="20" /></button>
-        <div class="model-selector">
+        <div class="topbar-context-controls">
+          <div class="model-selector">
           <ElSelect
             v-model="selectedModel"
             class="model-select"
@@ -816,6 +805,23 @@ onMounted(() => {
               </div>
             </ElOption>
           </ElSelect>
+          </div>
+          <ElDropdown trigger="click" @command="selectPromptTemplate">
+            <button class="topbar-prompt-trigger" type="button" :title="conversationId ? '当前会话提示词已锁定' : '选择提示词模板'">
+              <span class="topbar-prompt-copy"><small>提示词</small><strong>{{ selectedTemplateName }}</strong></span>
+              <LockKeyhole v-if="conversationId" :size="13" />
+              <ChevronDown v-else :size="14" />
+            </button>
+            <template #dropdown>
+              <ElDropdownMenu>
+                <ElDropdownItem command="" :disabled="Boolean(conversationId)"><span class="prompt-option"><strong>默认提示词</strong><small>通用</small></span></ElDropdownItem>
+                <ElDropdownItem v-for="template in promptTemplates" :key="template.id" :command="template.id" :disabled="Boolean(conversationId)">
+                  <span class="prompt-option"><strong>{{ template.name }}</strong><ElTag :type="template.scope === 'system' ? 'info' : 'success'" effect="plain" size="small">{{ template.scope === 'system' ? '系统' : '个人' }}</ElTag></span>
+                </ElDropdownItem>
+                <ElDropdownItem divided command="__manage__"><span class="prompt-manage-entry"><Settings :size="14" />管理提示词模板</span></ElDropdownItem>
+              </ElDropdownMenu>
+            </template>
+          </ElDropdown>
         </div>
         <div class="topbar-actions">
           <span class="service-status" :class="{ offline: !serviceOnline }"><span></span>{{ serviceOnline ? '服务正常' : '服务离线' }}</span>

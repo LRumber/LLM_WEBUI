@@ -104,14 +104,6 @@ button:disabled { cursor: not-allowed; }
 .nav-item:hover, .nav-item.active { color: #202020; background: #e9e9ea; }
 .nav-item.active { font-weight: 600; }
 
-.sidebar-prompt-section { margin-top: 15px; }
-.sidebar-prompt-section > .el-dropdown { width: 100%; }
-.sidebar-prompt-trigger { width: 100%; height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: #515151; text-align: left; background: transparent; border: 0; border-radius: 7px; }
-.sidebar-prompt-trigger:hover { color: #242424; background: #e9e9ea; }
-.sidebar-prompt-trigger > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.sidebar-prompt-trigger > svg:last-child { color: #929292; }
-.sidebar-prompt-section .el-dropdown.is-disabled .sidebar-prompt-trigger { color: #9a9a9a; background: transparent; cursor: not-allowed; }
-
 .history-section { min-height: 0; flex: 1; margin-top: 19px; overflow-y: auto; scrollbar-width: thin; }
 .section-label { height: 30px; display: flex; align-items: center; justify-content: space-between; padding: 0 3px 0 10px; color: #8b8b8b; font-size: 12px; font-weight: 550; }
 .history-search { height: 34px; display: flex; align-items: center; gap: 7px; margin: 1px 3px 9px; padding: 0 9px; color: #888888; background: #ffffff; border: 1px solid #dddddd; border-radius: 7px; }
@@ -146,6 +138,7 @@ button:disabled { cursor: not-allowed; }
 /* Conversation header and Element Plus model selector theme overrides. */
 .chat-workspace { min-width: 0; flex: 1; display: flex; flex-direction: column; background: #ffffff; }
 .topbar { height: 56px; flex: 0 0 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: rgba(255, 255, 255, 0.96); border-bottom: 1px solid #eeeeee; }
+.topbar-context-controls { min-width: 0; display: flex; align-items: center; gap: 7px; }
 .model-selector { height: 38px; display: flex; align-items: center; }
 .model-select { width: 210px; }
 .model-select .el-select__wrapper {
@@ -167,6 +160,13 @@ button:disabled { cursor: not-allowed; }
 .model-select-dropdown .el-select-dropdown__item { height: 42px; margin: 3px 5px; padding: 0 9px; border-radius: 6px; color: #444444; }
 .model-select-dropdown .el-select-dropdown__item.is-hovering { background: #f1f1f1; }
 .model-select-dropdown .el-select-dropdown__item.is-selected { color: #126f57; background: #edf6f3; font-weight: 600; }
+.topbar-prompt-trigger { max-width: 190px; height: 36px; display: flex; align-items: center; gap: 7px; padding: 4px 9px; color: #555555; text-align: left; background: transparent; border: 0; border-radius: 7px; }
+.topbar-prompt-trigger:hover { background: #f3f3f3; }
+.topbar-prompt-copy { min-width: 0; display: grid; line-height: 1.25; }
+.topbar-prompt-copy small { color: #999999; font-size: 8px; font-weight: 500; }
+.topbar-prompt-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.topbar-prompt-trigger > svg { flex: 0 0 auto; color: #898989; }
+.prompt-manage-entry { display: flex; align-items: center; gap: 7px; color: #555555; font-size: 11px; }
 .topbar-actions { display: flex; align-items: center; gap: 3px; }
 .service-status { height: 26px; display: flex; align-items: center; gap: 6px; margin-right: 4px; padding: 0 8px; color: #6d6d6d; background: #f6f6f6; border: 1px solid #e6e6e6; border-radius: 7px; font-size: 11px; }
 .service-status span { width: 7px; height: 7px; background: #1f9d72; border-radius: 50%; }

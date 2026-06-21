@@ -10,6 +10,8 @@ public record ConversationSummary(
         String model,
         int messageCount,
         String preview,
+        UUID promptTemplateId,
+        String promptTemplateName,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt
 ) {

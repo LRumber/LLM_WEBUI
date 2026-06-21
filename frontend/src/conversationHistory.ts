@@ -4,6 +4,8 @@ export interface ConversationSummary {
   model: string
   messageCount: number
   preview: string
+  promptTemplateId?: string | null
+  promptTemplateName?: string | null
   updatedAt: string
 }
 

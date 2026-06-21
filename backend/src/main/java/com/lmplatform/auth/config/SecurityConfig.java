@@ -25,13 +25,15 @@ public class SecurityConfig {
         return http
                 .csrf(csrf -> csrf.ignoringRequestMatchers(
                         "/actuator/health", "/api/chat/**", "/api/conversations/**",
-                        "/api/files/**", "/api/prompt-templates/**", "/api/admin/**"
+                        "/api/files/**", "/api/prompt-templates/**", "/api/admin/**",
+                        "/api/knowledge-bases/**"
                 ))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers("/api/health", "/api/auth/login", "/api/auth/oauth2/callback", "/actuator/health").permitAll()
                         .requestMatchers(
                                 "/api/models", "/api/chat/**", "/api/conversations/**",
-                                "/api/files/**", "/api/prompt-templates/**", "/api/admin/**"
+                                "/api/files/**", "/api/prompt-templates/**", "/api/admin/**",
+                                "/api/knowledge-bases/**"
                         ).permitAll()
                         .anyRequest().authenticated())
                 .build();

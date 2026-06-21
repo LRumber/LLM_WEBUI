@@ -806,22 +806,23 @@ onMounted(() => {
             </ElOption>
           </ElSelect>
           </div>
-          <ElDropdown trigger="click" @command="selectPromptTemplate">
-            <button class="topbar-prompt-trigger" type="button" :title="conversationId ? '当前会话提示词已锁定' : '选择提示词模板'">
-              <span class="topbar-prompt-copy"><small>提示词</small><strong>{{ selectedTemplateName }}</strong></span>
-              <LockKeyhole v-if="conversationId" :size="13" />
-              <ChevronDown v-else :size="14" />
+          <ElDropdown v-if="!conversationId" trigger="click" @command="selectPromptTemplate">
+            <button class="topbar-prompt-trigger" type="button" title="选择提示词模板">
+              <span class="prompt-pill-label">提示词：</span><strong>{{ selectedTemplateName }}</strong><ChevronDown :size="14" />
             </button>
             <template #dropdown>
               <ElDropdownMenu>
-                <ElDropdownItem command="" :disabled="Boolean(conversationId)"><span class="prompt-option"><strong>默认提示词</strong><small>通用</small></span></ElDropdownItem>
-                <ElDropdownItem v-for="template in promptTemplates" :key="template.id" :command="template.id" :disabled="Boolean(conversationId)">
+                <ElDropdownItem command=""><span class="prompt-option"><strong>默认提示词</strong><small>通用</small></span></ElDropdownItem>
+                <ElDropdownItem v-for="template in promptTemplates" :key="template.id" :command="template.id">
                   <span class="prompt-option"><strong>{{ template.name }}</strong><ElTag :type="template.scope === 'system' ? 'info' : 'success'" effect="plain" size="small">{{ template.scope === 'system' ? '系统' : '个人' }}</ElTag></span>
                 </ElDropdownItem>
                 <ElDropdownItem divided command="__manage__"><span class="prompt-manage-entry"><Settings :size="14" />管理提示词模板</span></ElDropdownItem>
               </ElDropdownMenu>
             </template>
           </ElDropdown>
+          <button v-else class="topbar-prompt-trigger locked" type="button" title="当前会话提示词已锁定" disabled>
+            <span class="prompt-pill-label">提示词：</span><strong>{{ selectedTemplateName }}</strong><LockKeyhole :size="13" />
+          </button>
         </div>
         <div class="topbar-actions">
           <span class="service-status" :class="{ offline: !serviceOnline }"><span></span>{{ serviceOnline ? '服务正常' : '服务离线' }}</span>

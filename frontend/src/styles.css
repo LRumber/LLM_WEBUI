@@ -160,11 +160,11 @@ button:disabled { cursor: not-allowed; }
 .model-select-dropdown .el-select-dropdown__item { height: 42px; margin: 3px 5px; padding: 0 9px; border-radius: 6px; color: #444444; }
 .model-select-dropdown .el-select-dropdown__item.is-hovering { background: #f1f1f1; }
 .model-select-dropdown .el-select-dropdown__item.is-selected { color: #126f57; background: #edf6f3; font-weight: 600; }
-.topbar-prompt-trigger { max-width: 190px; height: 36px; display: flex; align-items: center; gap: 7px; padding: 4px 9px; color: #555555; text-align: left; background: transparent; border: 0; border-radius: 7px; }
-.topbar-prompt-trigger:hover { background: #f3f3f3; }
-.topbar-prompt-copy { min-width: 0; display: grid; line-height: 1.25; }
-.topbar-prompt-copy small { color: #999999; font-size: 8px; font-weight: 500; }
-.topbar-prompt-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.topbar-prompt-trigger { max-width: 230px; height: 32px; display: flex; align-items: center; gap: 3px; padding: 0 10px; color: #565656; text-align: left; background: #f5f5f5; border: 1px solid #e7e7e7; border-radius: 16px; }
+.topbar-prompt-trigger:hover:not(:disabled) { color: #282828; background: #eeeeee; border-color: #dddddd; }
+.topbar-prompt-trigger strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.prompt-pill-label { flex: 0 0 auto; color: #7b7b7b; font-size: 12px; }
+.topbar-prompt-trigger.locked { color: #555555; background: #f7f7f7; cursor: default; opacity: 1; }
 .topbar-prompt-trigger > svg { flex: 0 0 auto; color: #898989; }
 .prompt-manage-entry { display: flex; align-items: center; gap: 7px; color: #555555; font-size: 11px; }
 .topbar-actions { display: flex; align-items: center; gap: 3px; }

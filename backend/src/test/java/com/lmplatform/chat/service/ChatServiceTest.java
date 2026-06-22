@@ -77,7 +77,7 @@ class ChatServiceTest {
         }).when(client).streamChat(eq("deepseek-chat"), any(), eq(true), any());
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        service.stream(new ChatStreamRequest(
+        service.stream(1L, new ChatStreamRequest(
                 null, "deepseek-chat", "你好", templateId, List.of(), List.of(knowledgeBaseId), true
         ), output);
 
@@ -130,7 +130,7 @@ class ChatServiceTest {
         }).when(client).streamChat(eq("deepseek-chat"), any(), eq(false), any());
 
         service.regenerate(
-                conversationId, oldAssistantId, "deepseek-chat", new ByteArrayOutputStream()
+                1L, conversationId, oldAssistantId, "deepseek-chat", new ByteArrayOutputStream()
         );
 
         verify(repository).finishAssistantMessage(

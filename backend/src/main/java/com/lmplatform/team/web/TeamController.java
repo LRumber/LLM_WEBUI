@@ -6,6 +6,9 @@ import com.lmplatform.team.model.TeamMemberSummary;
 import com.lmplatform.team.model.TeamRequest;
 import com.lmplatform.team.model.TeamSummary;
 import com.lmplatform.team.service.TeamService;
+import com.lmplatform.knowledge.service.KnowledgeBaseService;
+import com.lmplatform.knowledge.model.KnowledgeBaseRequest;
+import com.lmplatform.knowledge.model.KnowledgeBaseSummary;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.List;
@@ -26,10 +29,16 @@ public class TeamController {
 
     private final TeamService service;
     private final ConversationRepository users;
+    private final KnowledgeBaseService knowledgeBaseService;
 
-    public TeamController(TeamService service, ConversationRepository users) {
+    public TeamController(
+            TeamService service,
+            ConversationRepository users,
+            KnowledgeBaseService knowledgeBaseService
+    ) {
         this.service = service;
         this.users = users;
+        this.knowledgeBaseService = knowledgeBaseService;
     }
 
     @GetMapping
@@ -63,5 +72,18 @@ public class TeamController {
     ) {
         service.removeMember(teamId, userId, users.ensureDevelopmentUser());
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{teamId}/knowledge-bases")
+    public ResponseEntity<KnowledgeBaseSummary> createKnowledgeBase(
+            @PathVariable UUID teamId,
+            @Valid @RequestBody KnowledgeBaseRequest request
+    ) {
+        KnowledgeBaseSummary knowledgeBase = knowledgeBaseService.createTeam(
+                users.ensureDevelopmentUser(), teamId, request
+        );
+        return ResponseEntity.created(URI.create(
+                "/api/knowledge-bases/" + knowledgeBase.id()
+        )).body(knowledgeBase);
     }
 }

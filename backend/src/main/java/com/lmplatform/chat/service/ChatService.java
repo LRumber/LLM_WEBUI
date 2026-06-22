@@ -61,8 +61,7 @@ public class ChatService {
      * Executes one chat turn and writes normalized SSE events directly to the servlet response.
      * Partial assistant output is persisted when the upstream or browser connection fails.
      */
-    public void stream(ChatStreamRequest request, OutputStream output) throws IOException {
-        long userId = repository.ensureDevelopmentUser();
+    public void stream(long userId, ChatStreamRequest request, OutputStream output) throws IOException {
         boolean newConversation = request.conversationId() == null;
         PromptTemplate selectedTemplate = newConversation
                 ? repository.findPromptTemplate(request.templateId(), userId).orElse(null)
@@ -111,12 +110,12 @@ public class ChatService {
 
     /** Supersedes an owned assistant answer and streams a replacement from the same prior context. */
     public void regenerate(
+            long userId,
             UUID conversationId,
             UUID assistantMessageId,
             String model,
             OutputStream output
     ) throws IOException {
-        long userId = repository.ensureDevelopmentUser();
         if (!repository.prepareAssistantRegeneration(
                 conversationId, assistantMessageId, userId
         )) {

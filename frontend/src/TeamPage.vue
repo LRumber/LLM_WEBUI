@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ArrowLeft, Plus, Trash2, UserPlus, Users } from 'lucide-vue-next'
+import { ArrowLeft, Library, Plus, Trash2, UserPlus, Users } from 'lucide-vue-next'
 
 interface Team {
   id: string
@@ -91,6 +91,19 @@ const removeMember = async (member: TeamMember) => {
   if (response.ok) await Promise.all([loadMembers(), loadTeams()])
 }
 
+/** Creates a team-scoped knowledge base whose permissions follow future membership changes. */
+const createTeamKnowledgeBase = async () => {
+  if (!selectedId.value || !canManage.value) return
+  const name = window.prompt('请输入团队知识库名称')?.trim()
+  if (!name) return
+  const response = await fetch(`/api/teams/${selectedId.value}/knowledge-bases`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description: `${selected.value?.name || ''}团队共享资料`, icon: 'team' }),
+  })
+  if (!response.ok) return window.alert('团队知识库创建失败')
+  window.location.href = '/app/knowledge'
+}
+
 onMounted(async () => {
   await loadTeams()
   await loadMembers()
@@ -110,7 +123,7 @@ onMounted(async () => {
 
     <section class="team-content">
       <template v-if="selected">
-        <header><div><p>团队空间</p><h1>{{ selected.name }}</h1><span>{{ selected.description || '暂未填写团队说明' }}</span></div><b>{{ selected.memberRole === 'owner' ? '所有者' : selected.memberRole === 'admin' ? '管理员' : '成员' }}</b></header>
+        <header><div><p>团队空间</p><h1>{{ selected.name }}</h1><span>{{ selected.description || '暂未填写团队说明' }}</span></div><div class="team-header-actions"><button v-if="canManage" type="button" @click="createTeamKnowledgeBase"><Library :size="14" />创建团队知识库</button><b>{{ selected.memberRole === 'owner' ? '所有者' : selected.memberRole === 'admin' ? '管理员' : '成员' }}</b></div></header>
         <section v-if="canManage" class="team-add-member">
           <div><UserPlus :size="18" /><span><strong>添加已有影子用户</strong><small>输入账号、用户编号或平台用户 ID</small></span></div>
           <form @submit.prevent="addMember"><input v-model="memberIdentifier" required placeholder="用户名 / 用户编号 / ID" /><select v-model="memberRole"><option value="member">普通成员</option><option value="admin">团队管理员</option></select><button type="submit">添加</button></form>

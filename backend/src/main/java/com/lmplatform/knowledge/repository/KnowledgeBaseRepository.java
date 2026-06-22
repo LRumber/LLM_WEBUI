@@ -43,6 +43,36 @@ public class KnowledgeBaseRepository {
         return knowledgeBaseId;
     }
 
+    /** Creates a team-owned space and materializes inherited member permissions atomically. */
+    @Transactional
+    public Optional<UUID> createTeam(
+            long userId, UUID teamId, String name, String description, String icon
+    ) {
+        UUID knowledgeBaseId = UUID.randomUUID();
+        int inserted = jdbc.update("""
+                INSERT INTO knowledge_base (
+                    id, name, description, icon, space_type, owner_user_id, scope_ref
+                ) SELECT ?, ?, ?, ?, 'team', ?, ts.id
+                    FROM team_space ts
+                    JOIN team_member tm ON tm.team_id = ts.id AND tm.user_id = ?
+                   WHERE ts.id = ? AND ts.status = 'active' AND tm.member_role IN ('owner', 'admin')
+                """, knowledgeBaseId, name, description, icon, userId, userId, teamId);
+        if (inserted != 1) return Optional.empty();
+        jdbc.update("""
+                INSERT INTO knowledge_member (
+                    knowledge_base_id, user_id, member_role, permission_source
+                ) SELECT ?, tm.user_id,
+                         CASE tm.member_role
+                           WHEN 'owner' THEN 'owner'
+                           WHEN 'admin' THEN 'admin'
+                           ELSE 'viewer'
+                         END,
+                         'team'
+                    FROM team_member tm WHERE tm.team_id = ?
+                """, knowledgeBaseId, teamId);
+        return Optional.of(knowledgeBaseId);
+    }
+
     /** Lists only spaces visible through direct or future inherited membership. */
     public List<KnowledgeBaseSummary> listAccessible(long userId) {
         return jdbc.query("""

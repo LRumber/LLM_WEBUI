@@ -19,6 +19,9 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import com.lmplatform.auth.web.UserSession;
 
 /** Owns SQL persistence for conversations, messages, titles, and usage aggregates. */
 @Repository
@@ -35,6 +38,11 @@ public class ConversationRepository {
      * Replace this boundary with the authenticated shadow-user id when login is connected.
      */
     public long ensureDevelopmentUser() {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
+            var session = attributes.getRequest().getSession(false);
+            Object userId = session == null ? null : session.getAttribute(UserSession.USER_ID_KEY);
+            if (userId instanceof Number number) return number.longValue();
+        }
         Long id = jdbc.queryForObject("""
                 INSERT INTO app_user (external_user_id, account_number, display_name, user_number)
                 VALUES (-1, 'local-dev', '开发用户', 'local-dev')

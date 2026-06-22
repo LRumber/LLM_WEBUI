@@ -55,7 +55,8 @@ public class ChatController {
     /** Opens a persisted streaming turn and disables intermediary buffering. */
     @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<StreamingResponseBody> stream(@Valid @RequestBody ChatStreamRequest request) {
-        StreamingResponseBody body = output -> chatService.stream(request, output);
+        long userId = repository.ensureDevelopmentUser();
+        StreamingResponseBody body = output -> chatService.stream(userId, request, output);
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_EVENT_STREAM)
                 .header("Cache-Control", "no-cache")
@@ -172,8 +173,9 @@ public class ChatController {
             @PathVariable UUID messageId,
             @Valid @RequestBody RegenerateMessageRequest request
     ) {
+        long userId = repository.ensureDevelopmentUser();
         StreamingResponseBody body = output ->
-                chatService.regenerate(conversationId, messageId, request.model(), output);
+                chatService.regenerate(userId, conversationId, messageId, request.model(), output);
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_EVENT_STREAM)
                 .header("Cache-Control", "no-cache")

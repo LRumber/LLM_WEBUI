@@ -112,6 +112,8 @@ button:disabled { cursor: not-allowed; }
 .team-content > header h1 { margin: 0 0 8px; font-size: 27px; }
 .team-content > header span { color: #7f8883; font-size: 12px; }
 .team-content > header b { height: 25px; padding: 0 9px; color: #33745c; background: #eaf3ef; border-radius: 999px; font-size: 10px; line-height: 25px; }
+.team-header-actions { display: flex; align-items: center; gap: 8px; }
+.team-header-actions button { height: 30px; display: flex; align-items: center; gap: 5px; padding: 0 10px; color: #326e57; background: #fff; border: 1px solid #cfdcd6; border-radius: 7px; font-size: 11px; }
 .team-add-member { margin: 25px 0; padding: 16px; background: #fff; border: 1px solid #dfe5e1; border-radius: 11px; }
 .team-add-member > div { display: flex; align-items: center; gap: 9px; color: #346d57; }
 .team-add-member > div span { display: grid; gap: 2px; }

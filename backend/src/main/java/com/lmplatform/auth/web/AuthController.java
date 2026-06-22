@@ -1,6 +1,9 @@
 package com.lmplatform.auth.web;
 
 import com.lmplatform.auth.config.OAuth2GatewayProperties;
+import com.lmplatform.auth.service.OAuth2LoginService;
+import com.lmplatform.admin.model.AdminPrincipal;
+import com.lmplatform.admin.web.AdminSession;
 import jakarta.servlet.http.HttpSession;
 import java.net.URI;
 import java.util.UUID;
@@ -19,9 +22,11 @@ public class AuthController {
     private static final String OAUTH_STATE_SESSION_KEY = "oauth2_state";
 
     private final OAuth2GatewayProperties properties;
+    private final OAuth2LoginService loginService;
 
-    public AuthController(OAuth2GatewayProperties properties) {
+    public AuthController(OAuth2GatewayProperties properties, OAuth2LoginService loginService) {
         this.properties = properties;
+        this.loginService = loginService;
     }
 
     /** Redirects the browser to the identity gateway with a session-bound CSRF state value. */
@@ -55,9 +60,20 @@ public class AuthController {
             return ResponseEntity.badRequest().body(new AuthError("invalid_state", "OAuth2 state validation failed"));
         }
 
-        // Token exchange and shadow-user synchronization are implemented in the next auth slice.
-        return ResponseEntity.status(501)
-                .body(new AuthError("oauth_exchange_not_implemented", "OAuth2 token exchange is not implemented yet"));
+        try {
+            var user = loginService.authenticate(code);
+            session.setAttribute(UserSession.USER_ID_KEY, user.id());
+            if (user.administrator()) {
+                session.setAttribute(AdminSession.PRINCIPAL_KEY, new AdminPrincipal(
+                        user.id(), user.accountNumber(), user.displayName(), "oauth2"
+                ));
+            }
+            return ResponseEntity.status(302).location(URI.create("/app")).build();
+        } catch (Exception exception) {
+            return ResponseEntity.status(502).body(new AuthError(
+                    "oauth_exchange_failed", "OAuth2 login failed"
+            ));
+        }
     }
 
     private record AuthError(String code, String message) {

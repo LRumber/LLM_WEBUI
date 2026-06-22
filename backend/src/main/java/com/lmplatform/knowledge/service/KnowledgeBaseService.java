@@ -31,6 +31,18 @@ public class KnowledgeBaseService {
         return repository.findAccessible(id, userId).orElseThrow();
     }
 
+    public KnowledgeBaseSummary createTeam(
+            long userId, UUID teamId, KnowledgeBaseRequest request
+    ) {
+        UUID id = repository.createTeam(
+                userId, teamId, normalizeName(request.name()),
+                normalizeOptional(request.description()), normalizeOptional(request.icon())
+        ).orElseThrow(() -> new IllegalArgumentException(
+                "Only a team owner or administrator can create a team knowledge base"
+        ));
+        return repository.findAccessible(id, userId).orElseThrow();
+    }
+
     public List<KnowledgeBaseSummary> list(long userId) {
         return repository.listAccessible(userId);
     }

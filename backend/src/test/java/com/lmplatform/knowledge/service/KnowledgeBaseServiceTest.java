@@ -83,6 +83,24 @@ class KnowledgeBaseServiceTest {
         verify(repository).findAccessible(baseId, 9L);
     }
 
+    @Test
+    void createsTeamKnowledgeBaseThroughInheritedMembership() {
+        KnowledgeBaseRepository repository = mock(KnowledgeBaseRepository.class);
+        UUID teamId = UUID.randomUUID();
+        UUID baseId = UUID.randomUUID();
+        KnowledgeBaseSummary summary = new KnowledgeBaseSummary(
+                baseId, "团队资料", null, "team", "team", "owner", 0,
+                OffsetDateTime.now(), OffsetDateTime.now()
+        );
+        when(repository.createTeam(9L, teamId, "团队资料", null, "team"))
+                .thenReturn(Optional.of(baseId));
+        when(repository.findAccessible(baseId, 9L)).thenReturn(Optional.of(summary));
+
+        assertThat(service(repository).createTeam(
+                9L, teamId, new KnowledgeBaseRequest("团队资料", null, "team")
+        )).isEqualTo(summary);
+    }
+
     private KnowledgeBaseSummary summary(UUID id, String name) {
         OffsetDateTime now = OffsetDateTime.now();
         return new KnowledgeBaseSummary(

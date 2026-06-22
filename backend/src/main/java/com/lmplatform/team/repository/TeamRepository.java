@@ -97,20 +97,41 @@ public class TeamRepository {
         return count != null && count > 0;
     }
 
+    @Transactional
     public void addMember(UUID teamId, long targetUserId, long addedBy, String role) {
         jdbc.update("""
                 INSERT INTO team_member (team_id, user_id, member_role, added_by_user_id)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT (team_id, user_id) DO UPDATE SET member_role = EXCLUDED.member_role
                 """, teamId, targetUserId, role, addedBy);
+        jdbc.update("""
+                INSERT INTO knowledge_member (
+                    knowledge_base_id, user_id, member_role, permission_source
+                ) SELECT kb.id, ?, CASE ? WHEN 'admin' THEN 'admin' ELSE 'viewer' END, 'team'
+                    FROM knowledge_base kb
+                   WHERE kb.space_type = 'team' AND kb.scope_ref = ? AND kb.status = 'active'
+                ON CONFLICT (knowledge_base_id, user_id) DO UPDATE SET
+                    member_role = EXCLUDED.member_role
+                WHERE knowledge_member.permission_source = 'team'
+                """, targetUserId, role, teamId);
     }
 
+    @Transactional
     public boolean removeMember(UUID teamId, long targetUserId, long removedBy) {
-        return jdbc.update("""
+        boolean removed = jdbc.update("""
                 DELETE FROM team_member target USING team_member caller
                 WHERE target.team_id = ? AND target.user_id = ? AND target.member_role <> 'owner'
                   AND caller.team_id = target.team_id AND caller.user_id = ?
                   AND caller.member_role IN ('owner', 'admin')
                 """, teamId, targetUserId, removedBy) == 1;
+        if (removed) {
+            jdbc.update("""
+                    DELETE FROM knowledge_member km USING knowledge_base kb
+                    WHERE km.knowledge_base_id = kb.id AND km.user_id = ?
+                      AND km.permission_source = 'team'
+                      AND kb.space_type = 'team' AND kb.scope_ref = ?
+                    """, targetUserId, teamId);
+        }
+        return removed;
     }
 }

@@ -41,4 +41,15 @@ class AdminControllerTest {
         ).getStatusCode().value()).isEqualTo(204);
         verify(repository).setUserAdministrator(9L, true);
     }
+
+    @Test
+    void grantsOAuthUserTeamAdministratorAccessSeparately() {
+        AdminRepository repository = mock(AdminRepository.class);
+        when(repository.setTeamAdministrator(9L, true)).thenReturn(true);
+
+        assertThat(new AdminController(repository).setTeamAdministrator(
+                9L, new AdministratorStatusRequest(true)
+        ).getStatusCode().value()).isEqualTo(204);
+        verify(repository).setTeamAdministrator(9L, true);
+    }
 }

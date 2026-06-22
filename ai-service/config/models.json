@@ -4,11 +4,52 @@
       "key": "deepseek-chat",
       "display_name": "DeepSeek Chat",
       "provider": "deepseek",
-      "base_url": "https://api.deepseek.com",
+      "engine": "openai-compatible",
+      "category": "language",
+      "base_url": "https://api.deepseek.com/",
       "model_name": "deepseek-chat",
-      "capabilities": ["chat"],
+      "capabilities": [
+        "chat"
+      ],
       "enabled": true,
-      "context_window": 65536
+      "frontend_visible": true,
+      "context_window": 65536,
+      "max_concurrency": 4,
+      "api_key_env": null
+    },
+    {
+      "key": "embedding",
+      "display_name": "Embeddings",
+      "provider": "openai-compatible",
+      "engine": "openai-compatible",
+      "category": "embedding",
+      "base_url": "https://api.jina.ai/v1",
+      "model_name": "jina-embeddings-v5-text-small",
+      "capabilities": [
+        "embedding"
+      ],
+      "enabled": true,
+      "frontend_visible": false,
+      "context_window": 32768,
+      "max_concurrency": 4,
+      "api_key_env": null
+    },
+    {
+      "key": "reranker",
+      "display_name": "Reranker",
+      "provider": "openai-compatible",
+      "engine": "openai-compatible",
+      "category": "rerank",
+      "base_url": "https://api.jina.ai/v1",
+      "model_name": "jina-reranker-v3",
+      "capabilities": [
+        "rerank"
+      ],
+      "enabled": true,
+      "frontend_visible": false,
+      "context_window": 32768,
+      "max_concurrency": 4,
+      "api_key_env": null
     }
   ]
 }

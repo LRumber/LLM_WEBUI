@@ -7,6 +7,10 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lmplatform.chat.client.AiServiceClient;
+import java.nio.charset.StandardCharsets;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
 import org.junit.jupiter.api.Test;
 
 /** Unit tests for the authenticated model-management proxy contract. */
@@ -20,7 +24,7 @@ class AdminModelControllerTest {
                 """);
         when(client.upsertModel("local-chat", model)).thenReturn(model.toString());
 
-        assertThat(new AdminModelController(client).upsert("local-chat", model))
+        assertThat(new AdminModelController(client).upsert("local-chat", model).getBody())
                 .contains("local-chat");
         verify(client).upsertModel("local-chat", model);
     }
@@ -34,9 +38,30 @@ class AdminModelControllerTest {
                 """);
         when(client.discoverModels(connection)).thenReturn("[\"chat-model\",\"vision-model\"]");
 
-        assertThat(new AdminModelController(client).discover(connection))
+        assertThat(new AdminModelController(client).discover(connection).getBody())
                 .contains("chat-model", "vision-model");
         verify(client).discoverModels(connection);
+    }
+
+    /** Keeps FastAPI/Pydantic validation details visible to the administrator form. */
+    @Test
+    void returnsGatewayValidationDetails() throws Exception {
+        AiServiceClient client = mock(AiServiceClient.class);
+        var model = new ObjectMapper().readTree("""
+                {"key":"bad","base_url":"not-a-url"}
+                """);
+        when(client.upsertModel("bad", model)).thenThrow(HttpClientErrorException.create(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                "Unprocessable Entity",
+                HttpHeaders.EMPTY,
+                "{\"detail\":\"base_url must be a valid URL\"}".getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8
+        ));
+
+        var response = new AdminModelController(client).upsert("bad", model);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(422);
+        assertThat(response.getBody()).contains("base_url must be a valid URL");
     }
 
     @Test

@@ -36,6 +36,7 @@ interface AdminUser {
   displayName: string
   status: number
   administrator: boolean
+  teamAdministrator: boolean
   lastLoginAt: string | null
   conversationCount: number
   totalTokens: number
@@ -217,6 +218,17 @@ const setAdministrator = async (user: AdminUser) => {
     body: JSON.stringify({ enabled }),
   })
   if (response.ok) user.administrator = enabled
+}
+
+/** Grants team creation without granting system-administration access. */
+const setTeamAdministrator = async (user: AdminUser) => {
+  const enabled = !user.teamAdministrator
+  const response = await fetch(`/api/admin/users/${user.id}/team-administrator`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  if (response.ok) user.teamAdministrator = enabled
 }
 
 /** Opens a clean registration editor for an OpenAI-compatible inference endpoint. */
@@ -446,18 +458,19 @@ onMounted(checkSession)
         <div class="panel-heading"><div><h2>用户概况</h2><p>最近同步的 100 个影子用户及累计用量</p></div><span>{{ users.length }} 位用户</span></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>用户</th><th>账号</th><th>状态</th><th>后台权限</th><th>会话数</th><th>累计 Token</th><th>最近登录</th></tr></thead>
+            <thead><tr><th>用户</th><th>账号</th><th>状态</th><th>后台权限</th><th>团队权限</th><th>会话数</th><th>累计 Token</th><th>最近登录</th></tr></thead>
             <tbody>
               <tr v-for="user in users" :key="user.id">
                 <td><div class="table-user"><span>{{ user.displayName.slice(0, 1) }}</span><strong>{{ user.displayName }}</strong></div></td>
                 <td>{{ user.accountNumber }}</td>
                 <td><span class="status-pill" :class="{ inactive: user.status !== 1 }">{{ user.status === 1 ? '正常' : '停用' }}</span></td>
                 <td><button class="admin-toggle" :class="{ enabled: user.administrator }" type="button" @click="setAdministrator(user)"><span></span>{{ user.administrator ? '管理员' : '普通用户' }}</button></td>
+                <td><button class="admin-toggle" :class="{ enabled: user.teamAdministrator }" type="button" @click="setTeamAdministrator(user)"><span></span>{{ user.teamAdministrator ? '团队管理员' : '普通成员' }}</button></td>
                 <td>{{ formatNumber(user.conversationCount) }}</td>
                 <td>{{ formatNumber(user.totalTokens) }}</td>
                 <td>{{ formatDateTime(user.lastLoginAt) }}</td>
               </tr>
-              <tr v-if="!users.length && !loading"><td colspan="7" class="empty-table">暂无用户数据</td></tr>
+              <tr v-if="!users.length && !loading"><td colspan="8" class="empty-table">暂无用户数据</td></tr>
             </tbody>
           </table>
         </div>

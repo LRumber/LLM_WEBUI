@@ -95,6 +95,63 @@ button:disabled { cursor: not-allowed; }
   .knowledge-document-card { flex-wrap: wrap; }
 }
 
+/* Team management mirrors the knowledge workspace while keeping membership actions explicit. */
+.team-page { min-height: 100vh; display: grid; grid-template-columns: 268px 1fr; color: #29312d; background: #f7f8f7; }
+.team-sidebar { padding: 20px 14px; background: #f1f4f2; border-right: 1px solid #dde3df; }
+.team-sidebar > a { display: inline-flex; align-items: center; gap: 7px; margin: 0 6px 20px; color: #66706b; font-size: 13px; text-decoration: none; }
+.team-brand { display: flex; align-items: center; gap: 9px; padding: 0 8px 18px; color: #204f3f; font-size: 18px; }
+.team-create-button { width: 100%; height: 38px; display: flex; align-items: center; justify-content: center; gap: 7px; margin-bottom: 18px; color: #fff; background: #2e7259; border: 0; border-radius: 9px; }
+.team-item { width: 100%; display: flex; align-items: center; gap: 9px; padding: 9px; color: #4c5551; text-align: left; background: transparent; border: 0; border-radius: 9px; }
+.team-item:hover, .team-item.active { color: #245e4a; background: #e2ebe6; }
+.team-item > span { width: 31px; height: 31px; display: grid; place-items: center; color: #2e7259; background: #fff; border-radius: 8px; font-weight: 700; }
+.team-item div { min-width: 0; display: grid; gap: 2px; }
+.team-item small { color: #909894; font-size: 10px; }
+.team-content { padding: 42px clamp(28px, 5vw, 76px); }
+.team-content > header { display: flex; justify-content: space-between; padding-bottom: 28px; border-bottom: 1px solid #e0e5e2; }
+.team-content > header p { margin: 0 0 6px; color: #2e7259; font-size: 11px; font-weight: 600; }
+.team-content > header h1 { margin: 0 0 8px; font-size: 27px; }
+.team-content > header span { color: #7f8883; font-size: 12px; }
+.team-content > header b { height: 25px; padding: 0 9px; color: #33745c; background: #eaf3ef; border-radius: 999px; font-size: 10px; line-height: 25px; }
+.team-add-member { margin: 25px 0; padding: 16px; background: #fff; border: 1px solid #dfe5e1; border-radius: 11px; }
+.team-add-member > div { display: flex; align-items: center; gap: 9px; color: #346d57; }
+.team-add-member > div span { display: grid; gap: 2px; }
+.team-add-member small { color: #8a928e; font-size: 10px; font-weight: 400; }
+.team-add-member form { display: grid; grid-template-columns: 1fr 130px auto; gap: 8px; margin-top: 13px; }
+.team-add-member input, .team-add-member select { min-width: 0; height: 36px; padding: 0 10px; background: #fafbfa; border: 1px solid #d9dfdc; border-radius: 7px; }
+.team-add-member form button { padding: 0 15px; color: #fff; background: #2e7259; border: 0; border-radius: 7px; }
+.team-add-member > p, .team-dialog > p, .team-empty > span { margin: 9px 0 0; color: #a34b42; font-size: 11px; }
+.team-member-heading { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.team-member-heading span { color: #8b948f; font-size: 11px; }
+.team-member-list { display: grid; gap: 8px; }
+.team-member-list article { display: grid; grid-template-columns: 38px 1fr auto 30px; align-items: center; gap: 11px; padding: 12px 14px; background: #fff; border: 1px solid #e0e5e2; border-radius: 10px; }
+.team-member-avatar { width: 36px; height: 36px; display: grid; place-items: center; color: #2f7159; background: #eaf3ef; border-radius: 50%; font-weight: 700; }
+.team-member-list article div { display: grid; gap: 3px; }
+.team-member-list article small { color: #8a928e; font-size: 10px; }
+.team-member-list article b { color: #64716b; font-size: 10px; }
+.team-member-list article button { width: 30px; height: 30px; display: grid; place-items: center; color: #9a5b54; background: transparent; border: 0; border-radius: 6px; }
+.team-empty { min-height: calc(100vh - 84px); display: grid; place-items: center; align-content: center; gap: 9px; color: #829089; text-align: center; }
+.team-empty h1 { margin: 3px 0 0; color: #303934; font-size: 21px; }
+.team-empty p { margin: 0 0 7px; font-size: 12px; }
+.team-empty > button { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; color: #fff; background: #2e7259; border: 0; border-radius: 8px; }
+.team-dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(25,31,28,.42); }
+.team-dialog { width: min(480px, calc(100% - 32px)); display: grid; gap: 17px; padding: 22px; background: #fff; border-radius: 13px; }
+.team-dialog header { display: flex; justify-content: space-between; }
+.team-dialog h2 { margin: 0 0 4px; }
+.team-dialog header p { margin: 0; color: #858d89; font-size: 11px; }
+.team-dialog header button { color: #777; background: transparent; border: 0; font-size: 22px; }
+.team-dialog label { display: grid; gap: 6px; color: #59625e; font-size: 11px; font-weight: 600; }
+.team-dialog input, .team-dialog textarea { padding: 10px; border: 1px solid #d8dfdb; border-radius: 7px; font: inherit; }
+.team-dialog footer { display: flex; justify-content: flex-end; gap: 8px; }
+.team-dialog footer button { height: 34px; padding: 0 14px; border: 1px solid #d8dfdb; border-radius: 7px; }
+.team-dialog footer .primary { color: #fff; background: #2e7259; border-color: #2e7259; }
+
+@media (max-width: 760px) {
+  .team-page { grid-template-columns: 1fr; }
+  .team-sidebar { border-right: 0; border-bottom: 1px solid #dde3df; }
+  .team-content { padding: 24px 16px; }
+  .team-add-member form { grid-template-columns: 1fr; }
+}
+
 /* Unified-identity login surface. */
 .login-page {
   min-height: 100vh;

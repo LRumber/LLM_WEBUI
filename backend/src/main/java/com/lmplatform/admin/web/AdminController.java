@@ -49,4 +49,14 @@ public class AdminController {
                 ? ResponseEntity.noContent().build()
                 : ResponseEntity.notFound().build();
     }
+
+    @PatchMapping("/users/{userId}/team-administrator")
+    public ResponseEntity<Void> setTeamAdministrator(
+            @PathVariable long userId,
+            @RequestBody AdministratorStatusRequest request
+    ) {
+        return repository.setTeamAdministrator(userId, request.enabled())
+                ? ResponseEntity.noContent().build()
+                : ResponseEntity.notFound().build();
+    }
 }

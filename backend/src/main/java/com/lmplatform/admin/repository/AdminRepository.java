@@ -66,7 +66,8 @@ public class AdminRepository {
     public List<AdminUserSummary> users() {
         return jdbc.query("""
                 SELECT user_account.id, user_account.account_number, user_account.display_name,
-                       user_account.status, user_account.is_admin, user_account.last_login_at,
+                       user_account.status, user_account.is_admin, user_account.is_team_admin,
+                       user_account.last_login_at,
                        COALESCE(conversations.conversation_count, 0) AS conversation_count,
                        COALESCE(usage.total_tokens, 0) AS total_tokens
                 FROM app_user user_account
@@ -86,6 +87,7 @@ public class AdminRepository {
                 rs.getString("display_name"),
                 rs.getShort("status"),
                 rs.getBoolean("is_admin"),
+                rs.getBoolean("is_team_admin"),
                 rs.getObject("last_login_at", OffsetDateTime.class),
                 rs.getLong("conversation_count"),
                 rs.getLong("total_tokens")
@@ -98,5 +100,12 @@ public class AdminRepository {
                 UPDATE app_user SET is_admin = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
                 """, enabled, userId);
         return updated > 0;
+    }
+
+    /** Grants team creation rights without granting access to the system administration console. */
+    public boolean setTeamAdministrator(long userId, boolean enabled) {
+        return jdbc.update("""
+                UPDATE app_user SET is_team_admin = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                """, enabled, userId) == 1;
     }
 }

@@ -9,6 +9,7 @@ public record AdminUserSummary(
         String displayName,
         short status,
         boolean administrator,
+        boolean teamAdministrator,
         OffsetDateTime lastLoginAt,
         long conversationCount,
         long totalTokens

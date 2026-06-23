@@ -141,6 +141,58 @@ public class AiServiceClient {
         }
     }
 
+    /** Transcribes a browser recording through the AI gateway's local speech model boundary. */
+    public String transcribeAudio(byte[] content, String filename, String mediaType, String model) {
+        MultipartBodyBuilder body = new MultipartBodyBuilder();
+        body.part("file", new ByteArrayResource(content) {
+            @Override
+            public String getFilename() {
+                return filename;
+            }
+        }).contentType(MediaType.parseMediaType(mediaType));
+        String response = restClient.post()
+                .uri(uriBuilder -> {
+                    var builder = uriBuilder.path("/v1/audio/transcriptions");
+                    if (model != null && !model.isBlank()) {
+                        builder.queryParam("model", model);
+                    }
+                    return builder.build();
+                })
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .accept(MediaType.APPLICATION_JSON)
+                .body(body.build())
+                .retrieve()
+                .body(String.class);
+        try {
+            return objectMapper.readTree(response).path("text").asText();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Speech service returned invalid JSON", exception);
+        }
+    }
+
+    /** Scores candidate snippets through a registered rerank-capable model. */
+    public List<RerankScore> rerank(String model, String query, List<String> documents) {
+        String response = restClient.post()
+                .uri("/v1/rerank")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .body(Map.of("model", model, "query", query, "documents", documents))
+                .retrieve()
+                .body(String.class);
+        try {
+            List<RerankScore> scores = new ArrayList<>();
+            for (JsonNode item : objectMapper.readTree(response).path("results")) {
+                scores.add(new RerankScore(
+                        item.path("index").asInt(),
+                        item.path("relevance_score").asDouble()
+                ));
+            }
+            return scores;
+        } catch (IOException exception) {
+            throw new IllegalStateException("Rerank service returned invalid JSON", exception);
+        }
+    }
+
     /**
      * Sends an OpenAI-compatible conversation and forwards each normalized SSE event as it arrives.
      * The response is consumed inside the exchange callback so the underlying connection stays open.
@@ -210,5 +262,9 @@ public class AiServiceClient {
     @FunctionalInterface
     public interface EventConsumer {
         void accept(JsonNode event) throws IOException;
+    }
+
+    /** One rerank score referencing the original candidate list index. */
+    public record RerankScore(int index, double relevanceScore) {
     }
 }

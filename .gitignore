@@ -31,3 +31,10 @@ tmp/
 # Runtime-encrypted model credentials
 ai-service/config/.model-secret.key
 ai-service/config/model-secrets.json
+
+# Deployment secrets and generated artifacts
+deploy/certs/*.pem
+deploy/certs/*.key
+deploy/runtime.env
+deploy/backups/
+deploy/bundles/

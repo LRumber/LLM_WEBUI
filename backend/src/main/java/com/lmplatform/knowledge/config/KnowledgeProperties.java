@@ -5,7 +5,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /** Environment-configurable indexing settings suitable for an offline LAN embedding API. */
 @ConfigurationProperties("platform.knowledge")
 public record KnowledgeProperties(
-        String embeddingModel,
         int chunkTokens,
         int overlapTokens,
         int embeddingBatchSize

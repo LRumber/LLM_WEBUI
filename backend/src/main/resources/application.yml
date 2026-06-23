@@ -10,6 +10,20 @@ server:
 
 # Framework, database migration, and JSON serialization settings.
 spring:
+  session:
+    store-type: ${SESSION_STORE_TYPE:none}
+    timeout: ${SESSION_TIMEOUT:8h}
+    redis:
+      namespace: lm-platform:session
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+  servlet:
+    multipart:
+      max-file-size: ${MAX_UPLOAD_BYTES:104857600}
+      max-request-size: ${MAX_UPLOAD_BYTES:104857600}
   mvc:
     async:
       request-timeout: 180000
@@ -26,16 +40,19 @@ spring:
 
 # Platform-owned integrations remain environment-configurable for offline deployments.
 platform:
+  auth:
+    dev-login-enabled: ${DEV_LOGIN_ENABLED:false}
   admin:
     bootstrap:
       username: ${ADMIN_INITIAL_USERNAME:}
       password: ${ADMIN_INITIAL_PASSWORD:}
       display-name: ${ADMIN_INITIAL_DISPLAY_NAME:系统管理员}
   oauth2:
-    server: ${OAUTH2_SERVER:http://172.16.4.250:30801}
+    server: ${OAUTH2_SERVER:http://sso.sitp.ac.cn}
     client-id: ${OAUTH2_CLIENT_ID:replace-me}
     client-secret: ${OAUTH2_CLIENT_SECRET:replace-me}
     redirect-uri: ${OAUTH2_REDIRECT_URI:http://localhost:8080/api/auth/oauth2/callback}
+    send-state: ${OAUTH2_SEND_STATE:false}
   ai-service:
     base-url: ${AI_SERVICE_BASE_URL:http://localhost:8001}
     timeout-seconds: ${AI_SERVICE_TIMEOUT_SECONDS:150}
@@ -50,8 +67,6 @@ platform:
     bucket: ${MINIO_BUCKET:lm-platform-files}
     max-file-bytes: ${MAX_UPLOAD_BYTES:104857600}
   knowledge:
-    # This key references an embedding-capable model registered in the existing model admin page.
-    embedding-model: ${AI_EMBEDDING_MODEL:}
     chunk-tokens: ${KNOWLEDGE_CHUNK_TOKENS:600}
     overlap-tokens: ${KNOWLEDGE_OVERLAP_TOKENS:100}
     embedding-batch-size: ${KNOWLEDGE_EMBEDDING_BATCH_SIZE:16}

@@ -24,6 +24,7 @@ import {
   GitBranch,
   Library,
   LockKeyhole,
+  LogOut,
   Menu,
   MessageSquarePlus,
   Mic,
@@ -71,6 +72,20 @@ interface MessageCitation {
 interface KnowledgeBaseOption {
   id: string
   name: string
+}
+
+interface CurrentUser {
+  id: number
+  externalUserId?: number
+  idNo?: string
+  accountNumber: string
+  displayName: string
+  userNumber?: string
+  email?: string
+}
+
+interface AuthOptions {
+  devLoginEnabled: boolean
 }
 
 /** Model registration exposed through the Java proxy. */
@@ -174,7 +189,11 @@ const downloadCitation = async (citation: MessageCitation) => {
 const isKnowledge = computed(() => window.location.pathname.startsWith('/app/knowledge'))
 const isTeam = computed(() => window.location.pathname.startsWith('/app/teams'))
 const isWorkspace = computed(() => window.location.pathname.startsWith('/app') && !isKnowledge.value && !isTeam.value)
+const isUserApp = computed(() => window.location.pathname.startsWith('/app'))
 const isAdmin = computed(() => window.location.pathname.startsWith('/admin'))
+const userSessionChecked = ref(!isUserApp.value)
+const currentUser = ref<CurrentUser | null>(null)
+const authOptions = ref<AuthOptions>({ devLoginEnabled: false })
 const prompt = ref('')
 const models = ref<ModelInfo[]>([])
 const selectedModel = ref('deepseek-chat')
@@ -203,15 +222,25 @@ const templateForm = ref({ name: '', description: '', systemPrompt: '' })
 const fileInput = ref<HTMLInputElement | null>(null)
 const attachments = ref<UploadedFile[]>([])
 const uploadingFile = ref(false)
+const recordingVoice = ref(false)
+const transcribingVoice = ref(false)
 const thinkingEnabled = ref(false)
 const followLatest = ref(true)
 let abortController: AbortController | null = null
+let voiceRecorder: MediaRecorder | null = null
+let voiceChunks: Blob[] = []
 
 // Configure GitHub-flavored Markdown once; every rendered result is sanitized below.
 marked.setOptions({ gfm: true, breaks: true })
 
 const selectedModelName = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.display_name ?? 'DeepSeek Chat'
+})
+const currentUserInitial = computed(() => currentUser.value?.displayName?.slice(0, 1) || '用')
+const currentUserSubtitle = computed(() => {
+  const user = currentUser.value
+  if (!user) return ''
+  return user.userNumber ? `工号 ${user.userNumber}` : user.accountNumber || user.idNo || ''
 })
 const selectedModelCapabilities = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.capabilities ?? []
@@ -278,6 +307,29 @@ const toggleHistorySearch = async () => {
 /** Starts the organization's server-managed OAuth2 redirect flow. */
 const login = () => {
   window.location.href = '/api/auth/login'
+}
+
+const devLogin = async () => {
+  const response = await fetch('/api/auth/dev-login', { method: 'POST' })
+  if (!response.ok) {
+    window.alert('本机调试登录未启用，请确认后端 DEV_LOGIN_ENABLED=true')
+    return
+  }
+  currentUser.value = await response.json()
+  window.location.href = '/app'
+}
+
+const forwardOAuthCallback = () => {
+  const params = new URLSearchParams(window.location.search)
+  if (!params.has('code') && !params.has('error')) return false
+  window.location.href = `/api/auth/oauth2/callback${window.location.search}`
+  return true
+}
+
+const logout = async () => {
+  await fetch('/api/auth/logout', { method: 'POST' })
+  currentUser.value = null
+  window.location.href = '/'
 }
 
 /** Converts model Markdown to sanitized HTML safe for v-html rendering. */
@@ -432,6 +484,62 @@ const uploadFiles = async (event: Event) => {
   } finally {
     uploadingFile.value = false
     input.value = ''
+  }
+}
+
+/** Records audio locally in the browser, then sends it to the intranet speech model for transcription. */
+const toggleVoiceInput = async () => {
+  if (recordingVoice.value) {
+    voiceRecorder?.stop()
+    return
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    window.alert('当前浏览器不支持本地录音，请使用新版 Chrome、Edge 或 Firefox。')
+    return
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm'
+    voiceChunks = []
+    voiceRecorder = new MediaRecorder(stream, { mimeType })
+    voiceRecorder.ondataavailable = (event) => {
+      if (event.data.size) voiceChunks.push(event.data)
+    }
+    voiceRecorder.onstop = async () => {
+      stream.getTracks().forEach((track) => track.stop())
+      recordingVoice.value = false
+      const audio = new Blob(voiceChunks, { type: mimeType })
+      voiceChunks = []
+      if (!audio.size) return
+      transcribingVoice.value = true
+      try {
+        const body = new FormData()
+        body.append('file', audio, 'recording.webm')
+        const response = await fetch('/api/speech/transcribe', { method: 'POST', body })
+        if (!response.ok) {
+          const error = await response.json().catch(() => null)
+          throw new Error(error?.message || '语音识别失败')
+        }
+        const result: { text?: string } = await response.json()
+        const recognized = result.text?.trim()
+        if (recognized) {
+          prompt.value = prompt.value ? `${prompt.value}\n${recognized}` : recognized
+          await nextTick()
+          resizeComposer()
+          promptInput.value?.focus()
+        }
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : '语音识别失败，请确认已配置内网语音识别模型。')
+      } finally {
+        transcribingVoice.value = false
+      }
+    }
+    voiceRecorder.start()
+    recordingVoice.value = true
+  } catch {
+    window.alert('无法访问麦克风，请确认浏览器麦克风权限已允许。')
   }
 }
 
@@ -746,22 +854,33 @@ const handleComposerKeydown = (event: KeyboardEvent) => {
 }
 
 // Initial data is loaded only for the workspace route; the login route stays dependency-light.
-onMounted(() => {
-  if (isWorkspace.value) {
-    loadModels()
-    loadConversations()
-    loadPromptTemplates()
-    loadKnowledgeBases()
+onMounted(async () => {
+  if (forwardOAuthCallback()) return
+  try {
+    const response = await fetch('/api/auth/options')
+    if (response.ok) authOptions.value = await response.json()
+  } catch {
+    authOptions.value = { devLoginEnabled: false }
+  }
+  if (!isUserApp.value) return
+  try {
+    const response = await fetch('/api/auth/me')
+    if (response.ok) currentUser.value = await response.json()
+  } finally {
+    userSessionChecked.value = true
+  }
+  if (currentUser.value && isWorkspace.value) {
+    await Promise.all([loadModels(), loadConversations(), loadPromptTemplates(), loadKnowledgeBases()])
   }
 })
 </script>
 
 <template>
   <AdminDashboard v-if="isAdmin" />
-  <KnowledgeBasePage v-else-if="isKnowledge" />
-  <TeamPage v-else-if="isTeam" />
+  <KnowledgeBasePage v-else-if="isKnowledge && currentUser" />
+  <TeamPage v-else-if="isTeam && currentUser" />
   <!-- Authentication entry screen. -->
-  <main v-else-if="!isWorkspace" class="login-page">
+  <main v-else-if="!isUserApp || (userSessionChecked && !currentUser)" class="login-page">
     <section class="login-panel" aria-labelledby="login-title">
       <img class="login-logo" src="/brand/sitp-logo.jpg" alt="SITP" />
       <p class="product-name">离线智能工作台</p>
@@ -771,12 +890,15 @@ onMounted(() => {
         <ShieldCheck :size="18" />
         统一登录
       </button>
+      <button v-if="authOptions.devLoginEnabled" class="secondary-button login-button" type="button" @click="devLogin">
+        本机调试登录
+      </button>
       <p class="login-note">账号与权限由统一身份认证中心管理</p>
     </section>
   </main>
 
   <!-- Main application shell: navigation, conversation viewport, and composer. -->
-  <main v-else class="workspace-shell">
+  <main v-else-if="currentUser" class="workspace-shell">
     <button v-if="sidebarOpen" class="sidebar-scrim" aria-label="关闭侧栏" @click="sidebarOpen = false"></button>
     <aside class="sidebar" :class="{ open: sidebarOpen }">
       <!-- Product identity and primary navigation. -->
@@ -871,8 +993,11 @@ onMounted(() => {
 
       <div class="sidebar-footer">
         <div class="user-row">
-          <div class="avatar">管</div>
-          <div class="user-meta"><strong>开发用户</strong><span>本地调试模式</span></div>
+          <div class="avatar">{{ currentUserInitial }}</div>
+          <div class="user-meta">
+            <strong>{{ currentUser?.displayName || '已登录用户' }}</strong>
+            <span>{{ currentUserSubtitle }}</span>
+          </div>
         </div>
       </div>
     </aside>
@@ -927,6 +1052,8 @@ onMounted(() => {
         <div class="topbar-actions">
           <span class="service-status" :class="{ offline: !serviceOnline }"><span></span>{{ serviceOnline ? '服务正常' : '服务离线' }}</span>
           <span v-if="usage.total" class="token-usage">{{ usage.total }} tokens</span>
+          <span v-if="currentUser" class="current-user-name">{{ currentUser.displayName }}</span>
+          <button v-if="currentUser" class="icon-button" type="button" title="退出登录" @click="logout"><LogOut :size="16" /></button>
         </div>
       </header>
 
@@ -1019,9 +1146,16 @@ onMounted(() => {
           ></textarea>
           <div class="composer-toolbar">
             <div class="input-tools">
-              <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
+              <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
               <button class="icon-button" type="button" title="上传文件或图片" :disabled="uploadingFile" @click="fileInput?.click()"><Paperclip :size="19" /></button>
-              <button class="icon-button" title="语音输入" disabled><Mic :size="19" /></button>
+              <button
+                class="icon-button voice-button"
+                :class="{ recording: recordingVoice }"
+                type="button"
+                :title="recordingVoice ? '停止录音并识别' : transcribingVoice ? '正在识别语音' : '语音输入'"
+                :disabled="isGenerating || transcribingVoice"
+                @click="toggleVoiceInput"
+              ><Mic :size="19" /></button>
               <ElDropdown trigger="click" placement="top-start" @command="selectKnowledgeBase">
                 <button class="knowledge-button" :class="{ active: selectedKnowledgeBaseNames }" type="button" :title="selectedKnowledgeBaseNames || '选择知识库'">
                   <Library :size="16" /><span>{{ selectedKnowledgeBaseNames || '知识库' }}</span><LockKeyhole v-if="conversationId" :size="12" /><ChevronDown v-else :size="12" />
@@ -1054,7 +1188,7 @@ onMounted(() => {
             </div>
           </div>
         </div>
-        <p class="composer-note">内容由 AI 生成，请核实重要信息</p>
+        <p class="composer-note">{{ recordingVoice ? '正在录音，再次点击麦克风结束并识别' : transcribingVoice ? '正在使用内网语音模型识别...' : '内容由 AI 生成，请核实重要信息' }}</p>
       </footer>
 
       <div v-if="templateManagerOpen" class="template-manager-backdrop" @click.self="templateManagerOpen = false">

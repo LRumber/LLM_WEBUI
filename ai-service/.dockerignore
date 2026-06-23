@@ -1,0 +1,10 @@
+.pytest_cache
+.pytest_cache/**
+.venv
+.venv/**
+__pycache__
+**/__pycache__
+tests
+tests/**
+config/.model-secret.key
+config/model-secrets.json

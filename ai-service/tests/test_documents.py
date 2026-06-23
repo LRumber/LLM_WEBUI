@@ -4,6 +4,7 @@ import pytest
 from fastapi import UploadFile
 
 from app.documents import DocumentParseError, DocumentParser
+from app.models import ParsedDocument
 
 
 @pytest.mark.asyncio
@@ -25,3 +26,37 @@ async def test_rejects_unsupported_executable() -> None:
 
     with pytest.raises(DocumentParseError, match="Unsupported"):
         await parser.parse(upload)
+
+
+@pytest.mark.asyncio
+async def test_legacy_word_uses_local_office_conversion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Binary Office files should be converted locally before entering package parsers."""
+    parser = DocumentParser()
+
+    monkeypatch.setattr(parser, "_convert_office", lambda payload, source, target: b"docx")
+    monkeypatch.setattr(
+        parser,
+        "_parse_docx",
+        lambda payload, media_type: ParsedDocument(media_type=media_type, text=payload.decode()),
+    )
+    upload = UploadFile(filename="legacy.doc", file=__import__("io").BytesIO(b"old-office"))
+
+    result = await parser.parse(upload)
+
+    assert result.text == "docx"
+
+
+def test_scanned_pdf_falls_back_to_ocr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A PDF with pages but no extractable text should be rendered and OCRed locally."""
+    from pypdf import PdfWriter
+    buffer = __import__("io").BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.write(buffer)
+    parser = DocumentParser()
+    monkeypatch.setattr(parser, "_ocr_pdf", lambda payload: "扫描文字")
+
+    result = parser._parse_pdf(buffer.getvalue(), "application/pdf")
+
+    assert result.text == "扫描文字"
+    assert result.page_count == 1

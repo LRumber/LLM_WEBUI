@@ -83,9 +83,10 @@ public class TeamRepository {
         }
         return jdbc.query("""
                 SELECT id FROM app_user
-                WHERE status = 1 AND (id = ? OR account_number = ? OR user_number = ?)
+                WHERE status = 1
+                  AND (id = ? OR account_number = ? OR user_number = ? OR id_no = ? OR username = ?)
                 LIMIT 1
-                """, (rs, rowNum) -> rs.getLong("id"), numericId, identifier, identifier)
+                """, (rs, rowNum) -> rs.getLong("id"), numericId, identifier, identifier, identifier, identifier)
                 .stream().findFirst();
     }
 

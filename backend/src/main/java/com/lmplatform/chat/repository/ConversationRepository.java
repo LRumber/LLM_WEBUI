@@ -33,23 +33,14 @@ public class ConversationRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Returns the temporary local user used before OAuth2 principal integration is complete.
-     * Replace this boundary with the authenticated shadow-user id when login is connected.
-     */
+    /** Returns the OAuth2-synchronized local user id bound to the current browser session. */
     public long ensureDevelopmentUser() {
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
             var session = attributes.getRequest().getSession(false);
             Object userId = session == null ? null : session.getAttribute(UserSession.USER_ID_KEY);
             if (userId instanceof Number number) return number.longValue();
         }
-        Long id = jdbc.queryForObject("""
-                INSERT INTO app_user (external_user_id, account_number, display_name, user_number)
-                VALUES (-1, 'local-dev', '开发用户', 'local-dev')
-                ON CONFLICT (external_user_id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-                RETURNING id
-                """, Long.class);
-        return id;
+        throw new IllegalStateException("Authenticated user session is required");
     }
 
     /** Creates a conversation with an immediate first-prompt title marked as temporary. */

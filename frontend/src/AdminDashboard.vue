@@ -13,6 +13,7 @@ import {
   Users,
   Zap,
 } from 'lucide-vue-next'
+import { ElOption, ElSelect } from 'element-plus'
 import { adminPageMeta, resolveAdminPage } from './adminRouting'
 
 interface AdminOverview {
@@ -54,16 +55,21 @@ interface ModelRegistration {
   display_name: string
   provider: string
   engine: 'vllm' | 'sglang' | 'ollama' | 'llama.cpp' | 'openai-compatible'
-  category: 'language' | 'multimodal' | 'embedding' | 'rerank'
+  category: 'language' | 'multimodal' | 'embedding' | 'rerank' | 'speech'
   base_url: string
   model_name: string
   capabilities: string[]
   enabled: boolean
   frontend_visible: boolean
   context_window?: number
-  max_concurrency: number
   api_key_env?: string
   api_key?: string
+}
+
+interface ModelSettings {
+  embeddingModel: string
+  rerankerModel: string
+  speechModel: string
 }
 
 interface PromptTemplate {
@@ -99,9 +105,13 @@ const modelSaveError = ref('')
 const modelHealth = ref<Record<string, string>>({})
 const discoveredModels = ref<string[]>([])
 const discoveringModels = ref(false)
+const modelDiscoverMessage = ref('')
+const modelSettings = ref<ModelSettings>({ embeddingModel: '', rerankerModel: '', speechModel: '' })
+const modelSettingsSaving = ref(false)
+const modelSettingsMessage = ref('')
 const modelForm = ref<ModelRegistration>({
   key: '', display_name: '', provider: 'openai-compatible', engine: 'openai-compatible', category: 'language', base_url: '', model_name: '',
-  capabilities: ['chat'], enabled: true, frontend_visible: true, context_window: 32768, api_key: '', max_concurrency: 4,
+  capabilities: ['chat'], enabled: true, frontend_visible: true, context_window: 32768, api_key: '',
 })
 const templateForm = ref({ id: '', name: '', description: '', systemPrompt: '', enabled: true })
 
@@ -111,6 +121,16 @@ const pageMeta = computed(() => adminPageMeta[adminPage.value])
 const maxDailyTokens = computed(() => {
   return Math.max(...dailyUsage.value.map((day) => day.inputTokens + day.outputTokens), 1)
 })
+const embeddingModels = computed(() => models.value.filter((model) => model.enabled && model.category === 'embedding'))
+const rerankerModels = computed(() => models.value.filter((model) => model.enabled && model.category === 'rerank'))
+const speechModels = computed(() => models.value.filter((model) => model.enabled && model.category === 'speech'))
+const missingEmbeddingModel = computed(() => modelSettings.value.embeddingModel
+  && !embeddingModels.value.some((model) => model.key === modelSettings.value.embeddingModel))
+const missingRerankerModel = computed(() => modelSettings.value.rerankerModel
+  && !rerankerModels.value.some((model) => model.key === modelSettings.value.rerankerModel))
+const missingSpeechModel = computed(() => modelSettings.value.speechModel
+  && !speechModels.value.some((model) => model.key === modelSettings.value.speechModel))
+const adminSidebarName = computed(() => currentAdmin.value?.username || 'admin')
 
 const formatNumber = (value: number) => new Intl.NumberFormat('zh-CN').format(value)
 const formatDate = (value: string) => new Intl.DateTimeFormat('zh-CN', {
@@ -153,14 +173,41 @@ const loadCurrentPage = async () => {
 /** Loads administrative model registrations without making dashboard metrics depend on AI uptime. */
 const loadModels = async () => {
   try {
-    const response = await fetch('/api/admin/models')
-    if (response.status === 401) {
+    const [modelsResponse, settingsResponse] = await Promise.all([
+      fetch('/api/admin/models'),
+      fetch('/api/admin/model-settings'),
+    ])
+    if (modelsResponse.status === 401 || settingsResponse.status === 401) {
       currentAdmin.value = null
       return
     }
-    models.value = response.ok ? await response.json() : []
+    models.value = modelsResponse.ok ? await modelsResponse.json() : []
+    if (settingsResponse.ok) modelSettings.value = await settingsResponse.json()
   } catch {
     models.value = []
+  }
+}
+
+/** Persists platform default embedding and rerank model choices in the business database. */
+const saveModelSettings = async () => {
+  modelSettingsSaving.value = true
+  modelSettingsMessage.value = ''
+  try {
+    const response = await fetch('/api/admin/model-settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(modelSettings.value),
+    })
+    if (!response.ok) {
+      const detail = await response.text()
+      throw new Error(detail || `HTTP ${response.status}`)
+    }
+    modelSettings.value = await response.json()
+    modelSettingsMessage.value = '默认模型已保存'
+  } catch (error) {
+    modelSettingsMessage.value = `保存失败：${error instanceof Error ? error.message : '后台服务不可用'}`
+  } finally {
+    modelSettingsSaving.value = false
   }
 }
 
@@ -236,9 +283,10 @@ const setTeamAdministrator = async (user: AdminUser) => {
 const createModel = () => {
   modelForm.value = {
     key: '', display_name: '', provider: 'openai-compatible', engine: 'openai-compatible', category: 'language', base_url: '', model_name: '',
-    capabilities: ['chat'], enabled: true, frontend_visible: true, context_window: 32768, api_key: '', max_concurrency: 4,
+    capabilities: ['chat'], enabled: true, frontend_visible: true, context_window: 32768, api_key: '',
   }
   modelSaveError.value = ''
+  modelDiscoverMessage.value = ''
   discoveredModels.value = []
   modelEditorOpen.value = true
 }
@@ -247,26 +295,97 @@ const createModel = () => {
 const editModel = (model: ModelRegistration) => {
   modelForm.value = { ...JSON.parse(JSON.stringify(model)), api_key: '' }
   modelSaveError.value = ''
+  modelDiscoverMessage.value = ''
   discoveredModels.value = []
   modelEditorOpen.value = true
 }
 
+const friendlyDiscoverError = async (response: Response) => {
+  const detail = await response.text().catch(() => '')
+  const lower = detail.toLowerCase()
+  if (response.status === 401 || response.status === 403 || lower.includes('unauthorized')
+    || lower.includes('forbidden') || lower.includes('api key') || lower.includes('401')
+    || lower.includes('403')) {
+    return '模型识别失败：API 密钥无效或没有权限，请检查 API Key。'
+  }
+  if (response.status === 400 || lower.includes('base_url')) {
+    return 'API 地址格式不正确，请填写完整地址，例如 http://127.0.0.1:8000/v1'
+  }
+  if (response.status === 404) return '模型识别失败：未找到模型列表接口，请确认 API 地址是否为 OpenAI 兼容地址。'
+  if (response.status === 408 || response.status === 504 || lower.includes('timeout')) {
+    return '模型识别超时：请确认模型服务已启动，或稍后重试。'
+  }
+  if (response.status >= 500) return '模型识别失败：模型服务暂时不可用，请查看服务日志。'
+  return '模型识别失败：请检查 API 地址、密钥和模型服务状态。'
+}
+
 /** Discovers model identifiers using the entered API address and write-only credential. */
 const discoverModels = async () => {
-  if (!modelForm.value.base_url) return
+  modelDiscoverMessage.value = ''
+  discoveredModels.value = []
+  if (!modelForm.value.base_url) {
+    modelDiscoverMessage.value = '请先填写 API 地址。'
+    return
+  }
   discoveringModels.value = true
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 20_000)
   try {
     const response = await fetch('/api/admin/models/discover', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ base_url: modelForm.value.base_url, api_key: modelForm.value.api_key || null }),
+      signal: controller.signal,
     })
-    discoveredModels.value = response.ok ? await response.json() : []
+    if (!response.ok) {
+      modelDiscoverMessage.value = await friendlyDiscoverError(response)
+      return
+    }
+    const result = await response.json().catch(() => null)
+    if (!Array.isArray(result)) {
+      modelDiscoverMessage.value = '模型识别失败：服务返回格式不正确。'
+      return
+    }
+    discoveredModels.value = result
     if (!modelForm.value.model_name && discoveredModels.value.length) {
       modelForm.value.model_name = discoveredModels.value[0]
     }
+    modelDiscoverMessage.value = discoveredModels.value.length
+      ? `发现 ${discoveredModels.value.length} 个模型`
+      : '没有发现模型，请确认该 API 已启用模型列表接口。'
+  } catch (error) {
+    modelDiscoverMessage.value = error instanceof DOMException && error.name === 'AbortError'
+      ? '模型识别超时：请确认模型服务地址可访问。'
+      : '模型识别失败：无法连接模型服务，请确认地址、端口和网络可达。'
   } finally {
+    window.clearTimeout(timeout)
     discoveringModels.value = false
   }
+}
+
+const friendlyModelSaveError = async (response: Response) => {
+  const detail = await response.text()
+  const lower = detail.toLowerCase()
+  if (detail.includes('string_pattern_mismatch') || detail.includes('[a-z0-9][a-z0-9._-]+')
+    || lower.includes('"key"')) {
+    return '模型标识格式不正确：请使用小写字母、数字、点、下划线或短横线，并且必须以小写字母或数字开头。'
+  }
+  if (lower.includes('unauthorized') || lower.includes('forbidden') || lower.includes('api key')
+    || lower.includes('401') || lower.includes('403')) {
+    return '模型保存失败：API 密钥无效或没有权限，请检查 API Key。'
+  }
+  if (lower.includes('"category"') && lower.includes('"speech"') && lower.includes('enum')) {
+    return '模型保存失败：当前 AI 服务还不支持“语音识别服务”类型，请重启或更新 AI 服务后再保存。'
+  }
+  if (detail.includes('url') || detail.includes('base_url')) {
+    return 'API 地址格式不正确，请填写完整地址，例如 http://127.0.0.1:8000/v1'
+  }
+  if (lower.includes('model_name')) return '模型保存失败：请选择或填写模型名称。'
+  if (lower.includes('display_name')) return '模型保存失败：请填写显示名称。'
+  if (lower.includes('capabilities')) return '模型保存失败：模型能力配置不正确，请重新选择模型类型后保存。'
+  if (response.status === 404) return '模型管理服务暂不可用，请确认后台和 AI 服务已启动。'
+  if (response.status === 422) return `模型保存失败：表单内容校验未通过。${detail.slice(0, 180)}`
+  if (response.status >= 500) return '模型保存失败，请确认后台服务和数据库可用。'
+  return '模型保存失败，请检查表单内容后重试。'
 }
 
 /** Persists API connection, model capability, visibility, and concurrency settings atomically. */
@@ -274,11 +393,26 @@ const saveModel = async () => {
   modelSaving.value = true
   modelSaveError.value = ''
   try {
+    if (!/^[a-z0-9][a-z0-9._-]+$/.test(modelForm.value.key)) {
+      modelSaveError.value = '模型标识格式不正确：请使用小写字母、数字、点、下划线或短横线，并且必须以小写字母或数字开头。'
+      return
+    }
+    if (!modelForm.value.display_name.trim()) {
+      modelSaveError.value = '模型保存失败：请填写显示名称。'
+      return
+    }
+    if (!modelForm.value.model_name.trim()) {
+      modelSaveError.value = '模型保存失败：请选择或填写模型名称。'
+      return
+    }
     if (modelForm.value.category === 'embedding') {
       modelForm.value.capabilities = ['embedding']
       modelForm.value.frontend_visible = false
     } else if (modelForm.value.category === 'rerank') {
       modelForm.value.capabilities = ['rerank']
+      modelForm.value.frontend_visible = false
+    } else if (modelForm.value.category === 'speech') {
+      modelForm.value.capabilities = ['speech_to_text']
       modelForm.value.frontend_visible = false
     } else {
       modelForm.value.capabilities = modelForm.value.category === 'multimodal'
@@ -292,11 +426,10 @@ const saveModel = async () => {
       await loadModels()
     } else {
       // Show validation/proxy failures so the save button never appears to do nothing.
-      const detail = await response.text()
-      modelSaveError.value = detail || `保存失败：HTTP ${response.status}`
+      modelSaveError.value = await friendlyModelSaveError(response)
     }
   } catch (error) {
-    modelSaveError.value = error instanceof Error ? error.message : '保存失败：无法连接后台服务'
+    modelSaveError.value = '保存失败：无法连接后台服务，请确认后台服务已启动。'
   } finally {
     modelSaving.value = false
   }
@@ -377,7 +510,7 @@ onMounted(checkSession)
         <a :class="{ active: adminPage === 'settings' }" href="/admin/settings"><Settings :size="18" />系统设置</a>
       </nav>
       <div class="admin-sidebar-footer">
-        <div><strong>{{ currentAdmin.displayName }}</strong><span>本地管理员</span></div>
+        <div><strong>{{ adminSidebarName }}</strong><span>本地管理员</span></div>
         <button type="button" title="退出登录" @click="logout"><LogOut :size="16" /></button>
       </div>
     </aside>
@@ -401,13 +534,38 @@ onMounted(checkSession)
 
       <section v-if="adminPage === 'models'" class="admin-panel model-panel">
         <div class="panel-heading">
-          <div><h2>模型管理</h2><p>动态注册 OpenAI 兼容端点、推理引擎与 GPU 并发参数</p></div>
+          <div><h2>模型管理</h2><p>动态注册 OpenAI 兼容端点、模型能力与前台可见性</p></div>
           <button class="panel-action" type="button" @click="createModel">新增模型</button>
         </div>
+        <form class="model-defaults" @submit.prevent="saveModelSettings">
+          <label>默认 Embedding 模型
+            <ElSelect v-model="modelSettings.embeddingModel" class="admin-select" popper-class="admin-select-dropdown">
+              <ElOption label="不启用向量检索" value="" />
+              <ElOption v-if="missingEmbeddingModel" :label="`当前配置不可用：${modelSettings.embeddingModel}`" :value="modelSettings.embeddingModel" />
+              <ElOption v-for="model in embeddingModels" :key="model.key" :label="model.display_name" :value="model.key" />
+            </ElSelect>
+          </label>
+          <label>默认 Reranker 模型
+            <ElSelect v-model="modelSettings.rerankerModel" class="admin-select" popper-class="admin-select-dropdown">
+              <ElOption label="暂不重排" value="" />
+              <ElOption v-if="missingRerankerModel" :label="`当前配置不可用：${modelSettings.rerankerModel}`" :value="modelSettings.rerankerModel" />
+              <ElOption v-for="model in rerankerModels" :key="model.key" :label="model.display_name" :value="model.key" />
+            </ElSelect>
+          </label>
+          <label>默认语音识别模型
+            <ElSelect v-model="modelSettings.speechModel" class="admin-select" popper-class="admin-select-dropdown">
+              <ElOption label="不启用语音识别" value="" />
+              <ElOption v-if="missingSpeechModel" :label="`当前配置不可用：${modelSettings.speechModel}`" :value="modelSettings.speechModel" />
+              <ElOption v-for="model in speechModels" :key="model.key" :label="model.display_name" :value="model.key" />
+            </ElSelect>
+          </label>
+          <button type="submit" :disabled="modelSettingsSaving">{{ modelSettingsSaving ? '保存中…' : '保存默认模型' }}</button>
+          <span v-if="modelSettingsMessage">{{ modelSettingsMessage }}</span>
+        </form>
         <div class="model-grid">
           <article v-for="model in models" :key="model.key" class="model-card">
             <div class="model-card-heading"><span><Bot :size="18" /></span><div><strong>{{ model.display_name }}</strong><small>{{ model.key }}</small></div><i :class="{ enabled: model.enabled }">{{ model.enabled ? '启用' : '停用' }}</i></div>
-            <dl><div><dt>类型</dt><dd>{{ ({ language: '大语言模型', multimodal: '多模态', embedding: 'Embedding', rerank: 'Rerank' } as Record<string, string>)[model.category] }}</dd></div><div><dt>运行</dt><dd>{{ model.enabled ? '启用' : '停用' }}</dd></div><div><dt>前台展示</dt><dd>{{ model.frontend_visible ? '展示' : '隐藏' }}</dd></div><div><dt>上下文</dt><dd>{{ model.context_window || '-' }}</dd></div></dl>
+            <dl><div><dt>类型</dt><dd>{{ ({ language: '大语言模型', multimodal: '多模态', embedding: 'Embedding', rerank: 'Rerank', speech: '语音识别' } as Record<string, string>)[model.category] }}</dd></div><div><dt>运行</dt><dd>{{ model.enabled ? '启用' : '停用' }}</dd></div><div><dt>前台展示</dt><dd>{{ model.frontend_visible ? '展示' : '隐藏' }}</dd></div><div><dt>上下文</dt><dd>{{ model.context_window || '-' }}</dd></div></dl>
             <p>{{ model.base_url }}</p>
             <div class="model-card-actions"><button type="button" @click="checkModel(model)">{{ modelHealth[model.key] || '健康检查' }}</button><button type="button" @click="editModel(model)">编辑</button><button class="danger" type="button" @click="deleteModel(model)">移除</button></div>
           </article>
@@ -431,18 +589,34 @@ onMounted(checkSession)
         </div>
       </section>
 
-      <div v-if="adminPage === 'models' && modelEditorOpen" class="model-editor-backdrop" @click.self="modelEditorOpen = false">
+      <div v-if="adminPage === 'models' && modelEditorOpen" class="model-editor-backdrop">
         <form class="model-editor" @submit.prevent="saveModel">
           <div class="panel-heading"><div><h2>{{ models.some((item) => item.key === modelForm.key) ? '编辑模型' : '接入模型 API' }}</h2><p>填写 OpenAI 兼容 API 地址和密钥后识别模型</p></div><button class="editor-close" type="button" @click="modelEditorOpen = false">×</button></div>
           <div class="model-form-grid">
             <label>模型标识<input v-model="modelForm.key" pattern="[a-z0-9][a-z0-9._-]+" required /></label>
             <label>显示名称<input v-model="modelForm.display_name" required /></label>
-            <label>模型类型<select v-model="modelForm.category"><option value="language">大语言模型</option><option value="multimodal">多模态模型</option><option value="embedding">Embedding 服务</option><option value="rerank">Rerank 服务</option></select></label>
+            <label>模型类型
+              <ElSelect v-model="modelForm.category" class="admin-select" popper-class="admin-select-dropdown">
+                <ElOption label="大语言模型" value="language" />
+                <ElOption label="多模态模型" value="multimodal" />
+                <ElOption label="Embedding 服务" value="embedding" />
+                <ElOption label="Rerank 服务" value="rerank" />
+                <ElOption label="语音识别服务" value="speech" />
+              </ElSelect>
+            </label>
             <label>上下文窗口<input v-model.number="modelForm.context_window" type="number" min="1" /></label>
             <label class="wide">API 地址<input v-model="modelForm.base_url" type="url" placeholder="http://127.0.0.1:8000/v1" required /></label>
             <label class="wide">API Key<input v-model="modelForm.api_key" type="password" autocomplete="new-password" placeholder="编辑时留空表示保留原密钥" /></label>
-            <div class="wide discovery-row"><button type="button" :disabled="discoveringModels" @click="discoverModels">{{ discoveringModels ? '识别中…' : '识别 API 中的模型' }}</button><span v-if="discoveredModels.length">发现 {{ discoveredModels.length }} 个模型</span></div>
-            <label class="wide">模型名称<select v-if="discoveredModels.length" v-model="modelForm.model_name"><option v-for="name in discoveredModels" :key="name" :value="name">{{ name }}</option></select><input v-else v-model="modelForm.model_name" placeholder="可手动填写模型 ID" required /></label>
+            <div class="wide discovery-row">
+              <button type="button" :disabled="discoveringModels" @click="discoverModels">{{ discoveringModels ? '识别中…' : '识别 API 中的模型' }}</button>
+              <span v-if="modelDiscoverMessage" :class="{ error: !discoveredModels.length }">{{ modelDiscoverMessage }}</span>
+            </div>
+            <label class="wide">模型名称
+              <ElSelect v-if="discoveredModels.length" v-model="modelForm.model_name" class="admin-select" popper-class="admin-select-dropdown">
+                <ElOption v-for="name in discoveredModels" :key="name" :label="name" :value="name" />
+              </ElSelect>
+              <input v-else v-model="modelForm.model_name" placeholder="可手动填写模型 ID" required />
+            </label>
             <label class="model-enabled"><input v-model="modelForm.enabled" type="checkbox" />启用 API 调用</label>
             <label class="model-enabled"><input v-model="modelForm.frontend_visible" type="checkbox" />在前台对话模型列表展示</label>
           </div>
@@ -488,8 +662,8 @@ onMounted(checkSession)
       </section>
 
       <section v-if="adminPage === 'settings'" class="admin-panel settings-panel">
-        <div class="panel-heading"><div><h2>系统设置</h2><p>部署参数通过环境变量和离线配置文件管理</p></div></div>
-        <div class="settings-grid"><article><strong>认证模式</strong><span>本地管理员 + OAuth2 用户</span></article><article><strong>对象存储</strong><span>MinIO 私有 Bucket</span></article><article><strong>异步任务</strong><span>有界后台执行器</span></article><article><strong>配置原则</strong><span>密钥不写入浏览器或数据库明文</span></article></div>
+        <div class="panel-heading"><div><h2>系统设置</h2><p>这里展示运行策略。域名、HTTP/HTTPS 端口由部署文件和反向代理固定管理。</p></div></div>
+        <div class="settings-grid"><article><strong>访问地址</strong><span>由 Docker Compose、nginx 与证书配置决定，部署后不在后台动态修改</span></article><article><strong>认证模式</strong><span>本地管理员 + OAuth2 用户</span></article><article><strong>对象存储</strong><span>MinIO 私有 Bucket</span></article><article><strong>异步任务</strong><span>有界后台执行器</span></article><article><strong>模型默认值</strong><span>Embedding、Reranker、语音识别在模型管理中维护</span></article><article><strong>安全原则</strong><span>密钥不写入浏览器，部署参数不通过页面热修改</span></article></div>
       </section>
     </section>
   </main>
@@ -519,14 +693,17 @@ onMounted(checkSession)
 .metric-grid small, .metric-grid strong { display: block; }.metric-grid small { color: #818885; font-size: 11px; }.metric-grid strong { margin-top: 5px; font-size: 23px; }
 .admin-panel { margin-top: 17px; padding: 20px; background: #fff; border: 1px solid #e4e7e5; border-radius: 10px; }.panel-heading { display: flex; align-items: center; justify-content: space-between; }.panel-heading h2 { margin: 0; font-size: 15px; }.panel-heading p { margin: 5px 0 0; color: #8a918e; font-size: 11px; }.panel-heading > span { color: #7c8481; font-size: 11px; }
 .panel-action { height: 32px; padding: 0 11px; color: #fff; background: #1f765c; border: 0; border-radius: 6px; font-size: 11px; }.panel-action:hover { background: #185f4a; }
+.model-defaults { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 10px; margin-top: 16px; padding: 13px; background: #f7f9f8; border: 1px solid #e3e7e5; border-radius: 8px; }.model-defaults label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.model-defaults button { height: 34px; padding: 0 11px; color: #fff; background: #1e745a; border: 0; border-radius: 6px; font-size: 10px; }.model-defaults span { grid-column: 1 / -1; color: #66716c; font-size: 10px; }
+.admin-select { width: 100%; }.admin-select :deep(.el-select__wrapper) { min-height: 36px; padding: 0 10px; background: #fff; border-radius: 7px; box-shadow: 0 0 0 1px #d8ddda inset; }.admin-select :deep(.el-select__wrapper:hover) { box-shadow: 0 0 0 1px #bfc9c4 inset; }.admin-select :deep(.el-select__wrapper.is-focused) { box-shadow: 0 0 0 1px #4e907b inset, 0 0 0 3px #eaf3f0; }.admin-select :deep(.el-select__selected-item) { color: #303633; font-size: 12px; font-weight: 500; }.admin-select :deep(.el-select__caret) { color: #7d8783; }
+:global(.admin-select-dropdown.el-popper) { border: 1px solid #dfe5e2; border-radius: 9px; box-shadow: 0 12px 34px rgba(27, 43, 36, .14); }:global(.admin-select-dropdown .el-select-dropdown__item) { height: 34px; margin: 3px 6px; padding: 0 10px; border-radius: 6px; color: #4d5753; font-size: 12px; }:global(.admin-select-dropdown .el-select-dropdown__item.is-hovering) { background: #f2f6f4; }:global(.admin-select-dropdown .el-select-dropdown__item.is-selected) { color: #176f55; background: #e9f4ef; font-weight: 650; }
 .model-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 17px; }.model-card { min-width: 0; padding: 15px; border: 1px solid #e4e7e5; border-radius: 9px; }.model-card-heading { display: flex; align-items: center; gap: 9px; }.model-card-heading > span { width: 32px; height: 32px; display: grid; place-items: center; color: #23765d; background: #e9f4f0; border-radius: 7px; }.model-card-heading strong, .model-card-heading small { display: block; }.model-card-heading strong { font-size: 12px; }.model-card-heading small { margin-top: 3px; color: #929895; font-size: 9px; }.model-card-heading i { margin-left: auto; padding: 3px 6px; color: #8a5951; background: #f8ecea; border-radius: 8px; font-size: 9px; font-style: normal; }.model-card-heading i.enabled { color: #187056; background: #e8f4ef; }.model-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0 10px; }.model-card dl div { display: flex; justify-content: space-between; gap: 6px; }.model-card dt { color: #969c99; font-size: 9px; }.model-card dd { margin: 0; color: #4e5753; font-size: 10px; }.model-card > p { overflow: hidden; margin: 0; color: #8a918e; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.model-card-actions { display: flex; gap: 5px; margin-top: 13px; }.model-card-actions button { height: 27px; padding: 0 8px; color: #5f6864; background: #f5f7f6; border: 1px solid #e1e5e3; border-radius: 5px; font-size: 9px; }.model-card-actions button:hover { background: #ebefed; }.model-card-actions button.danger:hover { color: #9a3f35; background: #faeeec; }.model-empty { grid-column: 1 / -1; padding: 25px; color: #939a97; text-align: center; font-size: 11px; }
 .model-editor-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(20, 28, 25, .45); }.model-editor { width: min(100%, 680px); max-height: calc(100vh - 40px); overflow-y: auto; padding: 22px; background: #fff; border-radius: 11px; box-shadow: 0 20px 60px rgba(0,0,0,.2); }.editor-close { width: 30px; height: 30px; color: #737b78; background: transparent; border: 0; border-radius: 6px; font-size: 21px; }.editor-close:hover { background: #f0f2f1; }.model-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 20px; }.model-form-grid label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.model-form-grid label.wide { grid-column: 1 / -1; }.model-form-grid input:not([type=checkbox]), .model-form-grid select { width: 100%; height: 36px; padding: 0 9px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; }.model-form-grid input:focus, .model-form-grid select:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.model-form-grid .model-enabled { display: flex; grid-column: 1 / -1; align-items: center; gap: 8px; }.model-save-error { margin: 14px 0 0; padding: 10px 12px; color: #9b3f34; background: #fbefed; border: 1px solid #efd1cb; border-radius: 7px; font-size: 11px; line-height: 1.55; white-space: pre-wrap; }.editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 21px; }.editor-actions button { height: 34px; padding: 0 13px; color: #606966; background: #f4f6f5; border: 1px solid #dde1df; border-radius: 6px; }.editor-actions button.primary { color: #fff; background: #1e745a; border-color: #1e745a; }
-.discovery-row { display: flex; align-items: center; gap: 9px; }.discovery-row button { height: 33px; padding: 0 10px; color: #176d53; background: #e8f3ef; border: 0; border-radius: 6px; font-size: 10px; }.discovery-row span { color: #77817d; font-size: 10px; }
+.discovery-row { display: flex; align-items: center; gap: 9px; }.discovery-row button { height: 33px; padding: 0 10px; color: #176d53; background: #e8f3ef; border: 0; border-radius: 6px; font-size: 10px; }.discovery-row span { color: #66716c; font-size: 10px; line-height: 1.5; }.discovery-row span.error { color: #9b3f34; }
 .prompt-admin-layout { display: grid; grid-template-columns: .8fr 1.2fr; gap: 16px; margin-top: 17px; }.prompt-admin-list { max-height: 290px; overflow-y: auto; }.prompt-admin-list article { padding: 11px; border: 1px solid #e3e6e4; border-radius: 7px; cursor: pointer; }.prompt-admin-list article + article { margin-top: 7px; }.prompt-admin-list article:hover { background: #f7f9f8; }.prompt-admin-list article > div { display: flex; justify-content: space-between; }.prompt-admin-list strong { font-size: 11px; }.prompt-admin-list span { color: #187056; font-size: 9px; }.prompt-admin-list span.off { color: #9a5148; }.prompt-admin-list p { margin: 6px 0 0; color: #8b928f; font-size: 9px; }.prompt-admin-form { display: grid; gap: 10px; }.prompt-admin-form label { display: grid; gap: 5px; color: #5d6662; font-size: 10px; font-weight: 600; }.prompt-admin-form input:not([type=checkbox]), .prompt-admin-form textarea { padding: 8px 9px; border: 1px solid #d8dcda; border-radius: 6px; outline: 0; resize: vertical; }.prompt-admin-form .prompt-enabled { display: flex; align-items: center; gap: 6px; }.prompt-admin-form > button { height: 34px; color: #fff; background: #1e745a; border: 0; border-radius: 6px; }
 .usage-chart { min-height: 190px; display: flex; align-items: flex-end; gap: 14px; padding: 25px 8px 0; opacity: 1; transition: opacity .15s; }.usage-chart.loading { opacity: .45; }.usage-column { min-width: 0; height: 165px; display: flex; flex: 1; flex-direction: column; align-items: center; }.bar-area { width: min(44px, 70%); height: 112px; display: flex; align-items: flex-end; }.usage-bar { width: 100%; min-height: 4px; background: linear-gradient(180deg, #42a887, #197559); border-radius: 5px 5px 2px 2px; }.usage-column strong { margin-top: 8px; color: #59615e; font-size: 10px; }.usage-column span { margin-top: 5px; color: #949a98; font-size: 10px; }.empty-chart { width: 100%; align-self: center; color: #9aa09e; text-align: center; font-size: 12px; }
 .table-wrap { margin-top: 16px; overflow-x: auto; }table { width: 100%; border-collapse: collapse; font-size: 12px; }th { padding: 10px 12px; color: #8a918e; background: #f7f8f8; font-size: 10px; font-weight: 600; text-align: left; }td { padding: 12px; color: #59615e; border-bottom: 1px solid #eef0ef; }.table-user { display: flex; align-items: center; gap: 9px; }.table-user > span { width: 27px; height: 27px; display: grid; place-items: center; color: #fff; background: #527a6d; border-radius: 50%; font-size: 10px; }.table-user strong { color: #303633; font-size: 12px; }.status-pill { padding: 3px 7px; color: #197357; background: #e9f5f0; border-radius: 10px; font-size: 10px; }.status-pill.inactive { color: #8b4941; background: #f8eae8; }.empty-table { padding: 28px; color: #969c99; text-align: center; }
 .admin-toggle { display: flex; align-items: center; gap: 6px; padding: 0; color: #7d8582; background: transparent; border: 0; font-size: 10px; }.admin-toggle > span { position: relative; width: 26px; height: 15px; background: #cdd2d0; border-radius: 8px; transition: background .15s; }.admin-toggle > span::after { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; content: ''; background: #fff; border-radius: 50%; transition: transform .15s; }.admin-toggle.enabled { color: #176f55; }.admin-toggle.enabled > span { background: #27856a; }.admin-toggle.enabled > span::after { transform: translateX(11px); }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }.settings-grid article { padding: 15px; background: #f7f8f8; border: 1px solid #e6e8e7; border-radius: 7px; }.settings-grid strong, .settings-grid span { display: block; }.settings-grid strong { color: #3c4440; font-size: 11px; }.settings-grid span { margin-top: 6px; color: #838b87; font-size: 10px; }
 @media (max-width: 900px) { .admin-sidebar { width: 188px; flex-basis: 188px; }.admin-brand img { width: 62px; }.metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.model-grid { grid-template-columns: 1fr 1fr; }.admin-content { padding: 24px 20px 36px; } }
-@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-grid, .model-form-grid, .prompt-admin-layout, .settings-grid { grid-template-columns: 1fr; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
+@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-defaults, .model-grid, .model-form-grid, .prompt-admin-layout, .settings-grid { grid-template-columns: 1fr; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
 </style>

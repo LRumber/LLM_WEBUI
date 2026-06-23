@@ -1,7 +1,6 @@
 name: lm-platform
 
 services:
-  # PostgreSQL stores business records and pgvector knowledge embeddings.
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
@@ -9,32 +8,38 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-lm_platform}
       POSTGRES_USER: ${POSTGRES_USER:-lm_platform}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lm_platform} -d ${POSTGRES_DB:-lm_platform}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+    networks: [platform]
+    deploy:
+      resources:
+        limits:
+          cpus: ${POSTGRES_CPUS:-2.0}
+          memory: ${POSTGRES_MEMORY:-2G}
 
-  # Redis is reserved for distributed sessions, locks, cache, and short-lived state.
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+    networks: [platform]
+    deploy:
+      resources:
+        limits:
+          cpus: ${REDIS_CPUS:-0.5}
+          memory: ${REDIS_MEMORY:-512M}
 
-  # MinIO stores uploaded documents, images, and derived artifacts inside the LAN.
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     restart: unless-stopped
@@ -42,14 +47,152 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-lm_platform}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
     volumes:
       - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [platform]
+    deploy:
+      resources:
+        limits:
+          cpus: ${MINIO_CPUS:-2.0}
+          memory: ${MINIO_MEMORY:-2G}
 
-# Named volumes preserve state across container recreation.
+  ai-service:
+    image: lm-platform-ai:${PLATFORM_VERSION:-local}
+    build:
+      context: ../ai-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      AI_ENVIRONMENT: production
+      AI_MODEL_CONFIG_PATH: /app/config/models.json
+      AI_DEEPSEEK_API_KEY: ${AI_DEEPSEEK_API_KEY:-}
+      AI_CHAT_TIMEOUT_SECONDS: ${AI_CHAT_TIMEOUT_SECONDS:-120}
+    volumes:
+      - ai_config:/app/config
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [platform]
+    deploy:
+      resources:
+        limits:
+          cpus: ${AI_SERVICE_CPUS:-2.0}
+          memory: ${AI_SERVICE_MEMORY:-3G}
+
+  backend:
+    image: lm-platform-backend:${PLATFORM_VERSION:-local}
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: production
+      DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-lm_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-lm_platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-lm_platform}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-lm-platform-files}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-104857600}
+      AI_SERVICE_BASE_URL: http://ai-service:8001
+      AI_SERVICE_TIMEOUT_SECONDS: ${AI_SERVICE_TIMEOUT_SECONDS:-150}
+      AI_TITLE_MODEL: ${AI_TITLE_MODEL:-deepseek-chat}
+      AI_MAX_CONTEXT_MESSAGES: ${AI_MAX_CONTEXT_MESSAGES:-40}
+      KNOWLEDGE_CHUNK_TOKENS: ${KNOWLEDGE_CHUNK_TOKENS:-600}
+      KNOWLEDGE_OVERLAP_TOKENS: ${KNOWLEDGE_OVERLAP_TOKENS:-100}
+      KNOWLEDGE_EMBEDDING_BATCH_SIZE: ${KNOWLEDGE_EMBEDDING_BATCH_SIZE:-16}
+      ADMIN_INITIAL_USERNAME: ${ADMIN_INITIAL_USERNAME:-}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+      ADMIN_INITIAL_DISPLAY_NAME: ${ADMIN_INITIAL_DISPLAY_NAME:-系统管理员}
+      OAUTH2_SERVER: ${OAUTH2_SERVER:?OAUTH2_SERVER is required}
+      OAUTH2_CLIENT_ID: ${OAUTH2_CLIENT_ID:?OAUTH2_CLIENT_ID is required}
+      OAUTH2_CLIENT_SECRET: ${OAUTH2_CLIENT_SECRET:?OAUTH2_CLIENT_SECRET is required}
+      OAUTH2_REDIRECT_URI: ${OAUTH2_REDIRECT_URI:-http://192.168.88.103:8505}
+      OAUTH2_SEND_STATE: ${OAUTH2_SEND_STATE:-false}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      SPRING_SESSION_STORE_TYPE: redis
+      SPRING_SESSION_TIMEOUT: ${SESSION_TIMEOUT:-8h}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      ai-service: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8080'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [platform]
+    deploy:
+      resources:
+        limits:
+          cpus: ${BACKEND_CPUS:-2.0}
+          memory: ${BACKEND_MEMORY:-2G}
+
+  gateway:
+    image: lm-platform-gateway:${PLATFORM_VERSION:-local}
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-ai.sitp.ac.cn}
+      CLIENT_MAX_BODY_SIZE: ${CLIENT_MAX_BODY_SIZE:-100m}
+      NGINX_ENVSUBST_FILTER: "^(APP_DOMAIN|CLIENT_MAX_BODY_SIZE)$"
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      backend: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/gateway-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [platform]
+    deploy:
+      resources:
+        limits:
+          cpus: ${GATEWAY_CPUS:-1.0}
+          memory: ${GATEWAY_MEMORY:-256M}
+
+  minio-client:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles: ["tools"]
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-lm_platform}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-lm-platform-files}
+    volumes:
+      - ./backups:/backup
+    networks: [platform]
+
+  volume-tool:
+    image: alpine:3.21
+    profiles: ["tools"]
+    volumes:
+      - ai_config:/source
+      - ./backups:/backup
+
+networks:
+  platform:
+    driver: bridge
+
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  ai_config:

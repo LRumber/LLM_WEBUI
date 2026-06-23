@@ -7,6 +7,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.lmplatform.chat.client.AiServiceClient;
+import com.lmplatform.common.model.ModelDefaults;
+import com.lmplatform.common.repository.SystemSettingRepository;
 import com.lmplatform.knowledge.config.KnowledgeProperties;
 import com.lmplatform.knowledge.model.KnowledgeIndexSource;
 import com.lmplatform.knowledge.repository.KnowledgeBaseRepository;
@@ -27,9 +29,11 @@ class KnowledgeIndexingServiceTest {
                 new KnowledgeIndexSource(documentId, UUID.randomUUID(), "indexable document content")
         ));
         when(client.embed(eq("embedding-bge"), anyList())).thenReturn(List.of(new float[]{1f, 0f}));
+        SystemSettingRepository settings = mock(SystemSettingRepository.class);
+        when(settings.modelDefaults()).thenReturn(new ModelDefaults("embedding-bge", "", ""));
         var service = new KnowledgeIndexingService(
                 repository, new DocumentChunker(), client,
-                new KnowledgeProperties("embedding-bge", 600, 100, 16)
+                new KnowledgeProperties(600, 100, 16), settings
         );
 
         service.indexDocument(documentId);

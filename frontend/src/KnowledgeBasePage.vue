@@ -147,14 +147,20 @@ const uploadDocuments = async (event: Event) => {
       const body = new FormData()
       body.append('file', file)
       const uploadResponse = await fetch('/api/files', { method: 'POST', body })
-      if (!uploadResponse.ok) throw new Error(`${file.name} 上传失败`)
+      if (!uploadResponse.ok) {
+        const errorBody = await uploadResponse.json().catch(() => null)
+        throw new Error(errorBody?.message || `${file.name} 上传失败（HTTP ${uploadResponse.status}）`)
+      }
       const asset = await uploadResponse.json() as UploadedAsset
       const attachResponse = await fetch(`/api/knowledge-bases/${selectedId.value}/documents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fileId: asset.id }),
       })
-      if (!attachResponse.ok) throw new Error(`${file.name} 无法加入知识库`)
+      if (!attachResponse.ok) {
+        const errorBody = await attachResponse.json().catch(() => null)
+        throw new Error(errorBody?.message || `${file.name} 无法加入知识库（HTTP ${attachResponse.status}）`)
+      }
     }
     await Promise.all([loadDocuments(), loadKnowledgeBases()])
   } catch (error) {

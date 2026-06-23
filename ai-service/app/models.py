@@ -33,6 +33,7 @@ class ModelCategory(StrEnum):
     MULTIMODAL = "multimodal"
     EMBEDDING = "embedding"
     RERANK = "rerank"
+    SPEECH = "speech"
 
 
 class ModelEndpoint(BaseModel):
@@ -116,6 +117,12 @@ class ParsedDocument(BaseModel):
     metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
 
 
+class SpeechTranscriptionResponse(BaseModel):
+    """Text recognized from one uploaded audio clip."""
+
+    text: str
+
+
 class ChatRequest(BaseModel):
     """Bounded chat request forwarded to a registered model."""
     model: str
@@ -154,3 +161,25 @@ class EmbeddingResponse(BaseModel):
     data: list[EmbeddingItem]
     model: str
     usage: TokenUsage = Field(default_factory=TokenUsage)
+
+
+class RerankRequest(BaseModel):
+    """Provider-neutral rerank request resolved through a registered model key."""
+
+    model: str
+    query: str = Field(min_length=1, max_length=20_000)
+    documents: list[str] = Field(min_length=1, max_length=200)
+
+
+class RerankResult(BaseModel):
+    """One reranked document reference using the original document index."""
+
+    index: int
+    relevance_score: float
+
+
+class RerankResponse(BaseModel):
+    """Normalized rerank response consumed by the Java retrieval service."""
+
+    model: str
+    results: list[RerankResult]

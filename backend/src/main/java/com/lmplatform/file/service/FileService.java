@@ -86,7 +86,9 @@ public class FileService {
         if (mediaType.startsWith("image/")) return "image";
         if (mediaType.startsWith("audio/")) return "audio";
         if (mediaType.startsWith("text/") || mediaType.contains("pdf") || mediaType.contains("document")
-                || mediaType.contains("sheet") || mediaType.contains("presentation")) return "document";
+                || mediaType.contains("sheet") || mediaType.contains("presentation")
+                || mediaType.contains("msword") || mediaType.contains("excel")
+                || mediaType.contains("powerpoint")) return "document";
         return "other";
     }
 }

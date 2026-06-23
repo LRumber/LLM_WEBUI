@@ -11,14 +11,18 @@ from app.chat import ChatConfigurationError, ChatGateway, ModelBusyError, Upstre
 from app.config import get_settings
 from app.documents import DocumentParseError, DocumentParser
 from app.embeddings import EmbeddingError, EmbeddingGateway
-from app.models import ChatRequest, EmbeddingRequest, EmbeddingResponse, HealthResponse, ModelDiscoveryRequest, ModelEndpoint, ModelHealthResponse, ParsedDocument
+from app.models import ChatRequest, EmbeddingRequest, EmbeddingResponse, HealthResponse, ModelCapability, ModelDiscoveryRequest, ModelEndpoint, ModelHealthResponse, ParsedDocument, RerankRequest, RerankResponse, SpeechTranscriptionResponse
 from app.registry import ModelRegistry
+from app.rerank import RerankError, RerankGateway
+from app.speech import SpeechGateway, SpeechTranscriptionError
 
 settings = get_settings()
 registry = ModelRegistry(settings.model_config_path)
 chat_gateway = ChatGateway(settings)
 document_parser = DocumentParser()
 embedding_gateway = EmbeddingGateway(settings)
+rerank_gateway = RerankGateway(settings)
+speech_gateway = SpeechGateway()
 
 
 @asynccontextmanager
@@ -64,6 +68,18 @@ async def discover_models(request: ModelDiscoveryRequest) -> list[str]:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
         return [str(item["id"]) for item in response.json().get("data", []) if item.get("id")]
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status in {401, 403}:
+            raise HTTPException(status_code=status, detail="API key is missing, invalid, or not allowed") from exc
+        if status == 404:
+            raise HTTPException(status_code=404, detail="Model list endpoint was not found") from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"Model discovery failed with upstream HTTP {status}: {exc.response.text[:300]}",
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="Model discovery timed out") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Model discovery failed: {str(exc)[:300]}") from exc
 
@@ -151,6 +167,18 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.post("/v1/rerank", response_model=RerankResponse)
+async def rerank_documents(request: RerankRequest) -> RerankResponse:
+    """Score candidate documents through an enabled rerank-capable model endpoint."""
+    model = registry.get(request.model)
+    if model is None or "rerank" not in model.capabilities:
+        raise HTTPException(status_code=404, detail="Rerank model not found")
+    try:
+        return await rerank_gateway.rerank(request, model)
+    except RerankError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @app.post("/v1/documents/parse", response_model=ParsedDocument)
 async def parse_document(file: UploadFile = File(...)) -> ParsedDocument:
     """Parse one bounded document using only local libraries and OCR services."""
@@ -158,3 +186,28 @@ async def parse_document(file: UploadFile = File(...)) -> ParsedDocument:
         return await document_parser.parse(file)
     except DocumentParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/v1/audio/transcriptions", response_model=SpeechTranscriptionResponse)
+async def transcribe_audio(file: UploadFile = File(...), model: str | None = None) -> SpeechTranscriptionResponse:
+    """Transcribe audio through an enabled local or LAN speech-to-text model registration."""
+    speech_models = [
+        candidate for candidate in registry.list_enabled()
+        if ModelCapability.SPEECH_TO_TEXT in candidate.capabilities
+    ]
+    selected = registry.get(model) if model else (speech_models[0] if speech_models else None)
+    if selected is None or ModelCapability.SPEECH_TO_TEXT not in selected.capabilities:
+        raise HTTPException(status_code=404, detail="Speech-to-text model not configured")
+    media_type = file.content_type or "application/octet-stream"
+    if not media_type.startswith("audio/") and media_type not in {"video/webm", "application/octet-stream"}:
+        raise HTTPException(status_code=415, detail="Only audio recordings can be transcribed")
+    try:
+        text = await speech_gateway.transcribe(
+            selected,
+            await file.read(),
+            file.filename or "recording.webm",
+            media_type,
+        )
+        return SpeechTranscriptionResponse(text=text)
+    except SpeechTranscriptionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

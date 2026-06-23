@@ -26,6 +26,19 @@
       "enabled": true,
       "frontend_visible": false,
       "context_window": 32768
+    },
+    {
+      "key": "enterprise-speech",
+      "display_name": "企业语音识别模型",
+      "provider": "openai-compatible",
+      "engine": "openai-compatible",
+      "base_url": "https://model-gateway.example.com/v1",
+      "model_name": "whisper-large-v3",
+      "category": "speech",
+      "capabilities": ["speech_to_text"],
+      "enabled": true,
+      "frontend_visible": false,
+      "context_window": 32768
     }
   ]
 }

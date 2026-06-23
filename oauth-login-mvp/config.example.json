@@ -1,0 +1,11 @@
+{
+  "server": "http://sso.sitp.ac.cn",
+  "authorize_path": "/uias/oauth/authorize",
+  "access_token_path": "/uias/oauth/access_token",
+  "userinfo_path": "/uias/oauth/userInfo",
+  "client_id": "replace-me",
+  "client_secret": "replace-me",
+  "redirect_uri": "http://192.168.88.103:8505",
+  "listen_host": "0.0.0.0",
+  "listen_port": 8505
+}

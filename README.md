@@ -1,170 +1,226 @@
-# 离线大模型对话平台
+# 内网大模型对话平台
 
-面向无互联网环境部署的企业级大模型对话平台。平台统一接入现有 OAuth2 身份认证，支持多模型切换、多模态文件、语音识别、个人及团队知识库，并为智能体编排、应用发布、Skill 和 MCP 工具扩展预留标准接口。
+面向局域网和离线环境的大模型对话平台。仓库由 Vue 前端、Spring Boot 核心服务和 FastAPI AI 网关组成，通过 OpenAI 兼容 API 接入对话、Embedding、Reranker 和语音识别模型。
 
-## 建设目标
+## 当前功能
 
-- 统一 OAuth2 登录，不提供本地注册和密码登录
-- 支持本地大模型的接入、切换、授权和资源治理
-- 支持文件、图片、OCR 和离线语音识别
-- 支持个人、团队和项目知识库
-- 统计用户 Token、对话、登录及工具调用情况
-- 支持后续智能体编排、应用发布、Skill 和 MCP 服务
-- 所有运行依赖、模型及升级包均可离线交付
+### 用户工作台
 
-## 技术架构
+- OpenAI 兼容模型列表与模型切换
+- SSE 流式对话、推理过程展示和 Token 用量展示
+- 会话历史、搜索、重命名、软删除、分支、消息编辑和重新生成
+- 系统提示词与个人提示词模板
+- 文档和图片附件上传、解析、下载及处理状态展示
+- 多模态模型图片输入
+- 本地浏览器录音输入，调用内网语音识别模型转文字
+- 个人知识库选择、检索上下文注入和回答引用
+- 团队空间、团队成员和团队知识库
 
-```text
-Vue 3 用户端/管理端
-        |
-Spring Boot 核心平台
-  |- OAuth2、用户、团队、权限
-  |- 对话、配额、统计、审计
-  |- 模型和工具注册管理
-  `- 统一 API 与任务调度
-        |
-FastAPI AI 服务
-  |- 模型路由与推理适配
-  |- 文档解析、OCR、RAG
-  |- 语音识别
-  `- Agent、Skill、MCP 运行时
-        |
-本地模型 / PostgreSQL / Redis / MinIO
-```
+### 知识库
 
-## 技术选型
+- 创建、编辑和删除个人或团队知识库
+- PDF、DOC、DOCX、XLS、XLSX、PPT、PPTX、TXT、Markdown 文档解析
+- 扫描版 PDF 会渲染页面并用本地 OCR 识别
+- 旧 Office 格式通过容器内 LibreOffice 离线转换后解析
+- 图片 OCR，依赖 Tesseract 的 `chi_sim` 和 `eng` 语言包
+- 文档切片、Embedding、关键词与向量混合检索
+- 可选 Reranker 重排
+- 检索测试、引用快照和检索日志
+- Embedding 不可用时回退到关键词及有限片段召回
 
-| 领域 | 技术 |
+当前向量保存为 PostgreSQL `REAL[]`，相似度在 Java 服务中计算。Compose 使用 pgvector 镜像，但代码尚未切换为 pgvector 索引查询。
+
+### 管理后台
+
+- 独立本地管理员登录
+- 平台概览、用户权限和用量统计
+- OpenAI 兼容模型发现、注册、启停和健康检查
+- 控制哪些对话模型在前台展示
+- 设置默认 Embedding、Reranker 和语音识别模型，配置保存到数据库
+- 系统提示词模板管理
+- 系统设置展示运行策略；域名和端口由部署文件、Nginx 和证书配置固定管理
+
+模型 API Key 由 AI 服务加密保存，不通过查询接口返回。模型注册、密文和加密密钥位于 AI 服务的配置目录，部署时必须持久化并共同备份。
+
+## 尚未实现或未达到生产状态
+
+- 语音合成
+- Agent、Skill、MCP 和应用发布
+- pgvector 索引检索
+- OAuth2 单点退出、令牌刷新和身份中心停用事件主动推送
+- 自动证书续期
+
+## 技术栈
+
+| 模块 | 技术 |
 | --- | --- |
-| Web | Vue 3、TypeScript、Vite、Element Plus |
-| 核心后端 | Java 21、Spring Boot 3、Spring Security |
-| AI 服务 | Python 3.11、FastAPI、Pydantic |
-| 模型接入 | 管理后台配置 OpenAI 兼容 API 地址与 API Key |
-| 数据库 | PostgreSQL、pgvector |
-| 缓存 | Redis |
+| 前端 | Vue 3、TypeScript、Vite、Element Plus |
+| 核心服务 | Java 21、Spring Boot 3、Spring Security、JDBC、Flyway |
+| AI 网关 | Python 3.11+、FastAPI、Pydantic、httpx |
+| 数据库 | PostgreSQL；Compose 当前使用 pgvector PostgreSQL 镜像 |
 | 文件存储 | MinIO |
-| 异步任务 | RabbitMQ（按业务量启用） |
-| 可观测性 | Prometheus、Grafana、Loki |
-| 部署 | Docker Compose，后续可迁移 Kubernetes |
-
-## OAuth2 对接
-
-平台不提供注册功能。用户由统一身份认证中心维护，本平台仅保存业务授权和统计所需的影子用户。
-
-管理后台另设本地用户名密码账号，与 OAuth2 影子用户相互独立。后台管理员也可以为 OAuth2 用户授予或撤销管理权限；该权限仅保存在本平台，不回写身份认证中心。
-
-1. 浏览器访问 `{server}/uias/oauth/authorize`，携带 `client_id`、`redirect_uri`、`response_type=code` 和随机 `state`。
-2. 核心后端校验回调中的 `state`，使用授权码请求 `{server}/uias/oauth/access_token`。
-3. 核心后端使用访问令牌请求 `{server}/uias/oauth/userInfo`。
-4. 以 `userId` 作为外部身份唯一标识，创建或更新本地影子用户。
-5. 本地仅维护角色、团队、数据权限、模型权限和资源配额。
-
-`client_secret` 和访问令牌只能在服务端使用，不得写入浏览器存储、URL 或普通日志。对接文档中的 `check_token` 接口已废弃，不纳入实现。
-
-正式联调前还需向身份认证平台确认统一退出、刷新令牌、用户停用同步和认证服务不可用时的处理方式。
+| 会话 | Spring Session、Redis |
+| 文档解析 | pypdf、PyMuPDF、python-docx、openpyxl、python-pptx、Pillow、Tesseract、LibreOffice |
+| 模型协议 | OpenAI 兼容 Chat、Embeddings、Audio Transcriptions，以及 Jina/OpenAI 风格 Rerank |
 
 ## 仓库结构
 
 ```text
 LM_web/
-|- backend/            Spring Boot 核心业务平台
-|- ai-service/         FastAPI AI 能力服务
-|- frontend/           Vue 3 用户端与管理端
-|- deploy/             离线部署和基础设施配置
-|- docs/               架构、接口及运维文档
-`- .env.example        本地环境变量示例
+|- frontend/           Vue 用户工作台和管理后台
+|- backend/            Spring Boot 业务、权限、对话和知识库服务
+|- ai-service/         模型代理、文档解析、Embedding 和 Rerank 网关
+|- deploy/             完整 Compose、Nginx、备份恢复与离线交付脚本
+|- docs/               架构、运行依赖和开发规范
+|- .env.example        本地环境变量示例
+`- README.md
 ```
 
-## 核心数据域
+## 本地开发依赖
 
-- 身份权限：用户、团队、部门、角色、权限、登录流水
-- 对话模型：会话、消息、附件、模型、模型授权
-- 知识服务：知识库、文档、分片、索引任务、引用
-- 用量治理：调用流水、Token 用量、每日汇总、配额
-- 工具扩展：工具、Skill、MCP Server、调用流水
-- 智能体：智能体、工作流、版本、发布应用、运行记录
+- Java 21 和 Maven 3.9+
+- Node.js 20+ 和 npm
+- Python 3.11+
+- Docker 与 Docker Compose，用于 PostgreSQL、Redis 和 MinIO
+- Tesseract OCR 5.x，仅在需要图片 OCR 时必需
+- LibreOffice，仅在本机直接解析 `.doc/.xls/.ppt` 时必需；Docker 镜像内已包含
+- 至少一个可从部署网络访问的 OpenAI 兼容对话模型 API
+- 使用知识库向量检索时，还需要 Embedding API；Reranker 可选；语音输入需要内网语音识别 API
 
-Token 与登录统计采用“原始事件流水 + 每日聚合表”。原始流水用于审计，聚合表用于后台报表查询。
+内网离线安装时，先在联网的 Ubuntu 22.04 x86_64 构建机执行 `deploy/export-offline.sh`，再把生成的镜像包导入目标机。
 
-对话请求采用以下持久化链路：
+## 环境配置
 
-```text
-Vue -> Spring Boot -> PostgreSQL
-          |
-          `-> FastAPI -> DeepSeek / vLLM
+复制环境变量模板：
+
+```powershell
+Copy-Item .env.example .env
 ```
 
-AI 服务提供独立文档解析接口，支持 PDF、Word、Excel、PPT、TXT、Markdown 和常见图片；Office 表格与正文会被归一化，图片通过本地 Tesseract OCR，解析过程不执行宏或嵌入脚本。
+至少检查以下配置：
 
-Spring Boot 创建会话并保存用户消息，从 PostgreSQL 加载历史上下文，再将 FastAPI 的 SSE 增量逐块转发给前端。生成完成后保存助手消息、Token、响应耗时和每日用量汇总。
+- `DATABASE_URL`、`POSTGRES_USER`、`POSTGRES_PASSWORD`
+- `MINIO_ENDPOINT`、`MINIO_ROOT_USER`、`MINIO_ROOT_PASSWORD`、`MINIO_BUCKET`
+- `AI_SERVICE_BASE_URL`
+- 初始管理员 `ADMIN_INITIAL_*`
+- OAuth2 服务与客户端参数
 
-对话上下文按 `AI_MAX_CONTEXT_MESSAGES` 截取最近的有效消息；用户编辑消息时，后续消息保留为审计用的 superseded 版本。任意有效消息均可创建独立会话分支；重新生成会保留旧回答并从原问题上下文流式生成替代版本。系统和个人提示词模板在首轮作为持久化 system 消息写入。
+Embedding、Reranker 和语音识别默认模型不再通过 `.env` 配置。先在 `/admin/models` 注册模型，再在同一页面保存默认模型。
 
-工作台输入框旁的设置按钮用于新建、编辑和删除当前用户的个人提示词模板；系统模板在管理后台统一维护，普通用户只能选择和查看，不能修改。删除操作采用停用语义，确保历史会话引用仍可追溯。
+## 本地启动
 
-## 第一阶段范围
+1. 启动基础设施：
 
-- [x] 项目结构与架构约定
-- [ ] OAuth2 登录及影子用户同步
-- [ ] RBAC 与团队管理
-- [x] DeepSeek 模型注册、切换和流式对话
-- [x] 对话消息、Token 和每日用量持久化
-- [x] 文件上传、MinIO 对象存储及异步解析
-- [x] 基础管理后台
-
-第二阶段加入知识库、OCR 和语音识别；第三阶段加入 Skill、MCP 与安全沙箱；第四阶段实现智能体编排和应用发布。
-
-## 本地开发
-
-复制 `.env.example` 为 `.env` 并填写 OAuth2 配置。首次启动需要提前准备可离线使用的 Maven、Python 和 npm 依赖包。
-
-```bash
-docker compose -f deploy/docker-compose.yml up -d
-cd backend && ./mvnw spring-boot:run
-cd ai-service && uvicorn app.main:app --host 0.0.0.0 --port 8001
-cd frontend && npm run dev
+```powershell
+docker compose --env-file .env -f deploy/docker-compose.yml -f deploy/docker-compose.local.yml --profile tools up -d postgres redis minio minio-client
 ```
 
-默认端口：前端 `5173`，核心后端 `8080`，AI 服务 `8001`。
-
-本地 PostgreSQL 需要预先创建 `lm_platform` 数据库和同名登录用户，并确保根目录 `.env` 中的 `DATABASE_URL`、`POSTGRES_USER`、`POSTGRES_PASSWORD` 与实际配置一致。Spring Boot 启动时通过 Flyway 自动创建和升级表结构。
-
-### DeepSeek 对话
-
-开发阶段使用 DeepSeek 的 OpenAI 兼容 API。将密钥写入仓库根目录 `.env`：
-
-```dotenv
-AI_DEEPSEEK_API_KEY=your-api-key
-```
-
-随后启动 AI 服务和前端：
+2. 启动 AI 服务：
 
 ```powershell
 cd ai-service
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
 
-cd ../frontend
+也可以直接使用本地脚本：
+
+```powershell
+scripts\run-ai-service-local.cmd
+```
+
+3. 启动后端：
+
+```powershell
+cd backend
+mvn spring-boot:run
+```
+
+Spring Boot 启动时自动执行 Flyway 数据库迁移。
+
+本地调试登录可通过 `DEV_LOGIN_ENABLED=true` 启用，脚本 [run-backend-local.cmd](scripts/run-backend-local.cmd) 已内置该变量。
+
+4. 启动前端：
+
+```powershell
+cd frontend
+npm ci
 npm run dev
 ```
 
-访问 `http://127.0.0.1:5173/app` 即可进行流式多轮对话。管理员在 `/admin/models` 填写 OpenAI 兼容 API 地址和 API Key，可自动发现模型，并分别设置模型类型、运行状态和前台可见性。API Key 由 AI 服务加密保存，不会通过查询接口返回。
+默认地址：
 
-Windows 本地依赖、OCR 语言包和 Docker 服务启动方式见 [运行依赖说明](docs/runtime-dependencies.md)。
+- 用户工作台：`http://127.0.0.1:8505/app`
+- 知识库：`http://127.0.0.1:8505/app/knowledge`
+- 团队空间：`http://127.0.0.1:8505/app/teams`
+- 管理后台：`http://127.0.0.1:8505/admin`
+- 后端健康检查：`http://127.0.0.1:8080/actuator/health`
+- AI 服务健康检查：`http://127.0.0.1:8001/health`
+- MinIO Console：`http://127.0.0.1:9001`
 
-首次启用管理后台前，在 `.env` 配置 `ADMIN_INITIAL_USERNAME`、`ADMIN_INITIAL_PASSWORD` 和 `ADMIN_INITIAL_DISPLAY_NAME`。Spring Boot 启动后会创建首个本地管理员，之后不会用环境变量覆盖已有账号密码。管理后台地址为 `http://127.0.0.1:5173/admin`。
+## 测试与构建
 
-管理后台采用独立模块地址：`/admin` 概览、`/admin/users` 用户、`/admin/usage` 用量、`/admin/models` 模型、`/admin/prompts` 提示词以及 `/admin/settings` 系统设置。各页面共用管理会话，但只加载当前模块数据。
+```powershell
+cd backend
+mvn test
 
-用户工作台与管理后台不互相展示导航入口，两套界面通过各自独立地址进入，避免普通对话流程暴露管理面。
+cd ..\frontend
+npm test
+npm run build
 
-首轮对话创建时先使用用户问题生成临时标题，首轮回答保存后再异步生成 AI 标题。标题模型由 `AI_TITLE_MODEL` 独立配置，目前与主对话共用 `deepseek-chat`；后续注册本地轻量模型后，只需将该变量改为对应模型 key。用户手动修改的标题会标记为 `manual`，异步任务不会覆盖。
+cd ..\ai-service
+.\.venv\Scripts\python.exe -m pip install -e ".[test]"
+.\.venv\Scripts\python.exe -m pytest
+```
 
-## 开发原则
+## Docker 部署
 
-- API 优先，模型推理服务使用 OpenAI 兼容协议
-- 核心业务保持模块化单体，边界成熟后再拆分微服务
-- AI 能力通过独立服务隔离，避免 Python 依赖侵入业务平台
-- 文件、模型和工具均按最小权限访问并保留审计记录
-- 不依赖公网运行，第三方包、镜像和模型必须支持离线导入
+仓库现在提供 Ubuntu 22.04 x86_64 的完整容器编排：
 
-新增和修改代码应遵循 [代码与注释规范](docs/coding-standards.md)。公开契约和复杂边界必须有注释，禁止使用逐行复述代码的无效注释。
+- Vue 构建与 Nginx HTTP/HTTPS 网关
+- Spring Boot 后端
+- FastAPI、Tesseract、`chi_sim`、`eng` 和中文字体
+- LibreOffice 和 PyMuPDF，用于旧 Office 文件转换与扫描版 PDF OCR
+- PostgreSQL、MinIO 和用于 Spring Session 的 Redis
+- 健康检查、启动依赖、资源限制和持久卷
+- 默认域名 `ai.sitp.ac.cn`；域名和端口由部署配置管理
+- PostgreSQL、MinIO、模型配置和密钥备份恢复
+- 联网构建及 x86_64 离线镜像导出导入
+
+快速启动：
+
+```bash
+cp .env.example .env
+cp deploy/runtime.env.example deploy/runtime.env
+chmod 600 deploy/certs/sitp.ac.cn.key
+chmod +x deploy/*.sh
+./deploy/platform.sh up
+```
+
+详细步骤、端口变更、离线交付和恢复流程见 [Ubuntu 部署说明](docs/deployment-ubuntu.md)。
+
+## 主要接口
+
+Spring Boot：
+
+- `/api/models`、`/api/chat/stream`
+- `/api/conversations/**`
+- `/api/files/**`
+- `/api/knowledge-bases/**`
+- `/api/teams/**`
+- `/api/prompt-templates/**`
+- `/api/admin/**`
+
+FastAPI：
+
+- `/health`
+- `/v1/models`
+- `/v1/chat/stream`
+- `/v1/embeddings`
+- `/v1/rerank`
+- `/v1/audio/transcriptions`
+- `/v1/documents/parse`
+- `/internal/models/**`
+
+更多边界说明见 [运行依赖](docs/runtime-dependencies.md) 和 [架构说明](docs/architecture.md)。

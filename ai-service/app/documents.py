@@ -1,7 +1,11 @@
 """Extract text, tables, and basic metadata from supported offline document formats."""
 
 import io
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 
 from fastapi import UploadFile
 
@@ -32,6 +36,8 @@ class DocumentParser:
             return self._parse_xlsx(payload, media_type)
         if suffix == ".pptx":
             return self._parse_pptx(payload, media_type)
+        if suffix in {".doc", ".xls", ".ppt"}:
+            return self._parse_legacy_office(payload, suffix, media_type)
         if suffix in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}:
             return self._parse_image(payload, media_type)
         raise DocumentParseError(f"Unsupported file type: {suffix or 'unknown'}")
@@ -46,12 +52,14 @@ class DocumentParser:
         raise DocumentParseError("Text encoding is not supported")
 
     def _parse_pdf(self, payload: bytes, media_type: str) -> ParsedDocument:
-        """Extract ordered page text from a PDF without running JavaScript or attachments."""
+        """Extract ordered page text, falling back to local OCR for scanned PDFs."""
         try:
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(payload))
             text = "\n\n".join(page.extract_text() or "" for page in reader.pages)
-            return ParsedDocument(media_type=media_type, text=text, page_count=len(reader.pages))
+            if text.strip():
+                return ParsedDocument(media_type=media_type, text=text, page_count=len(reader.pages))
+            return ParsedDocument(media_type=media_type, text=self._ocr_pdf(payload), page_count=len(reader.pages))
         except ImportError as exc:
             raise DocumentParseError("PDF parser is not installed") from exc
         except Exception as exc:
@@ -103,6 +111,52 @@ class DocumentParser:
         except Exception as exc:
             raise DocumentParseError(f"PowerPoint parsing failed: {exc}") from exc
 
+    def _parse_legacy_office(self, payload: bytes, suffix: str, media_type: str) -> ParsedDocument:
+        """Convert binary Office files with local LibreOffice before normal package parsing."""
+        targets = {".doc": ".docx", ".xls": ".xlsx", ".ppt": ".pptx"}
+        target_suffix = targets[suffix]
+        converted = self._convert_office(payload, suffix, target_suffix)
+        if target_suffix == ".docx":
+            return self._parse_docx(converted, media_type)
+        if target_suffix == ".xlsx":
+            return self._parse_xlsx(converted, media_type)
+        return self._parse_pptx(converted, media_type)
+
+    def _convert_office(self, payload: bytes, source_suffix: str, target_suffix: str) -> bytes:
+        soffice = shutil.which("soffice") or shutil.which("libreoffice")
+        if not soffice:
+            raise DocumentParseError("LibreOffice is not installed")
+        with tempfile.TemporaryDirectory(prefix="lm-office-") as workspace:
+            workdir = Path(workspace)
+            source = workdir / f"upload{source_suffix}"
+            source.write_bytes(payload)
+            env = os.environ.copy()
+            env["HOME"] = workspace
+            result = subprocess.run(
+                [
+                    soffice,
+                    "--headless",
+                    "--nologo",
+                    "--nofirststartwizard",
+                    "--nodefault",
+                    "--convert-to",
+                    target_suffix.lstrip("."),
+                    "--outdir",
+                    workspace,
+                    str(source),
+                ],
+                cwd=workspace,
+                env=env,
+                capture_output=True,
+                timeout=120,
+                check=False,
+            )
+            converted = workdir / f"upload{target_suffix}"
+            if result.returncode != 0 or not converted.exists():
+                detail = (result.stderr or result.stdout).decode("utf-8", errors="ignore")[:300]
+                raise DocumentParseError(f"Office conversion failed: {detail or 'no output file'}")
+            return converted.read_bytes()
+
     def _parse_image(self, payload: bytes, media_type: str) -> ParsedDocument:
         """Run local OCR when Pillow and Tesseract bindings are available."""
         try:
@@ -114,3 +168,27 @@ class DocumentParser:
             raise DocumentParseError("OCR dependencies are not installed") from exc
         except Exception as exc:
             raise DocumentParseError(f"Image OCR failed: {exc}") from exc
+
+    def _ocr_pdf(self, payload: bytes) -> str:
+        """Render scanned PDF pages locally and run Tesseract OCR on each page."""
+        try:
+            import fitz
+            from PIL import Image
+            import pytesseract
+        except ImportError as exc:
+            raise DocumentParseError("PDF OCR dependencies are not installed") from exc
+
+        try:
+            document = fitz.open(stream=payload, filetype="pdf")
+            try:
+                texts: list[str] = []
+                matrix = fitz.Matrix(2, 2)
+                for page in document:
+                    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+                    image = Image.open(io.BytesIO(pixmap.tobytes("png")))
+                    texts.append(pytesseract.image_to_string(image, lang="chi_sim+eng"))
+                return "\n\n".join(part.strip() for part in texts if part.strip())
+            finally:
+                document.close()
+        except Exception as exc:
+            raise DocumentParseError(f"PDF OCR failed: {exc}") from exc

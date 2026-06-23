@@ -1,6 +1,7 @@
 package com.lmplatform.knowledge.service;
 
 import com.lmplatform.chat.client.AiServiceClient;
+import com.lmplatform.common.repository.SystemSettingRepository;
 import com.lmplatform.knowledge.config.KnowledgeProperties;
 import com.lmplatform.knowledge.model.KnowledgeChunk;
 import com.lmplatform.knowledge.repository.KnowledgeBaseRepository;
@@ -18,17 +19,20 @@ public class KnowledgeIndexingService {
     private final DocumentChunker chunker;
     private final AiServiceClient aiServiceClient;
     private final KnowledgeProperties properties;
+    private final SystemSettingRepository settings;
 
     public KnowledgeIndexingService(
             KnowledgeBaseRepository repository,
             DocumentChunker chunker,
             AiServiceClient aiServiceClient,
-            KnowledgeProperties properties
+            KnowledgeProperties properties,
+            SystemSettingRepository settings
     ) {
         this.repository = repository;
         this.chunker = chunker;
         this.aiServiceClient = aiServiceClient;
         this.properties = properties;
+        this.settings = settings;
     }
 
     @Async("knowledgeTaskExecutor")
@@ -52,13 +56,13 @@ public class KnowledgeIndexingService {
             );
             if (chunks.isEmpty()) throw new IllegalStateException("Document contains no indexable text");
             List<float[]> vectors = new ArrayList<>();
-            boolean embeddingConfigured = properties.embeddingModel() != null
-                    && !properties.embeddingModel().isBlank();
+            String embeddingModel = settings.modelDefaults().embeddingModel();
+            boolean embeddingConfigured = embeddingModel != null && !embeddingModel.isBlank();
             if (embeddingConfigured) {
                 for (int start = 0; start < chunks.size(); start += properties.embeddingBatchSize()) {
                     int end = Math.min(chunks.size(), start + properties.embeddingBatchSize());
                     vectors.addAll(aiServiceClient.embed(
-                            properties.embeddingModel(),
+                            embeddingModel,
                             chunks.subList(start, end).stream().map(KnowledgeChunk::content).toList()
                     ));
                 }
@@ -67,7 +71,7 @@ public class KnowledgeIndexingService {
             // Keyword-only indexing is a complete offline fallback, not a failed intermediate state.
             repository.replaceChunks(
                     documentId, chunks, vectors,
-                    embeddingConfigured ? properties.embeddingModel() : null
+                    embeddingConfigured ? embeddingModel : null
             );
         } catch (Exception exception) {
             String message = exception.getMessage() == null ? "Knowledge indexing failed" : exception.getMessage();

@@ -8,7 +8,8 @@ public record OAuth2GatewayProperties(
         String server,
         String clientId,
         String clientSecret,
-        String redirectUri
+        String redirectUri,
+        boolean sendState
 ) {
     /** Returns the authorization-code endpoint documented by the identity provider. */
     public String authorizeEndpoint() {

@@ -312,6 +312,25 @@ public class KnowledgeBaseRepository {
                 """, (rs, rowNum) -> mapSearchCandidate(rs), userId, knowledgeBaseId, limit);
     }
 
+    /** Supplies bounded ready chunks when lexical search has no hit and vector search is unavailable. */
+    public List<KnowledgeSearchCandidate> listFallbackCandidates(
+            UUID knowledgeBaseId, long userId, int limit
+    ) {
+        return jdbc.query("""
+                SELECT dc.id, dc.document_id, kd.file_id, fa.original_name, dc.content,
+                       dc.page_number, dc.title_path, dc.embedding, 0.15 AS keyword_score
+                FROM document_chunk dc
+                JOIN knowledge_document kd ON kd.id = dc.document_id AND kd.status = 'ready'
+                JOIN knowledge_member km ON km.knowledge_base_id = kd.knowledge_base_id
+                                        AND km.user_id = ?
+                JOIN knowledge_base kb ON kb.id = kd.knowledge_base_id AND kb.status = 'active'
+                JOIN file_asset fa ON fa.id = kd.file_id
+                WHERE kd.knowledge_base_id = ?
+                ORDER BY kd.updated_at DESC, dc.chunk_index
+                LIMIT ?
+                """, (rs, rowNum) -> mapSearchCandidate(rs), userId, knowledgeBaseId, limit);
+    }
+
     public void recordRetrieval(
             UUID knowledgeBaseId, long userId, String query, String mode,
             int candidateCount, int durationMs, List<KnowledgeSearchResult> results

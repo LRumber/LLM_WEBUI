@@ -1,0 +1,13 @@
+services:
+  redis:
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  minio:
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  postgres:
+    ports:
+      - "5432:5432"

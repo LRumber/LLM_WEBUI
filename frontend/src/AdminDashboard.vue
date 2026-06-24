@@ -405,6 +405,7 @@ const saveModel = async () => {
       modelSaveError.value = '模型保存失败：请选择或填写模型名称。'
       return
     }
+    modelForm.value.engine = 'openai-compatible'
     if (modelForm.value.category === 'embedding') {
       modelForm.value.capabilities = ['embedding']
       modelForm.value.frontend_visible = false

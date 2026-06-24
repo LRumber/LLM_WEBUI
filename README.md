@@ -84,8 +84,9 @@ LM_web/
 - Docker 与 Docker Compose，用于 PostgreSQL、Redis 和 MinIO
 - Tesseract OCR 5.x，仅在需要图片 OCR 时必需
 - LibreOffice，仅在本机直接解析 `.doc/.xls/.ppt` 时必需；Docker 镜像内已包含
+- ffmpeg，仅在本机直接使用浏览器录音转写时建议安装；Docker AI 镜像内已包含
 - 至少一个可从部署网络访问的 OpenAI 兼容对话模型 API
-- 使用知识库向量检索时，还需要 Embedding API；Reranker 可选；语音输入需要内网语音识别 API
+- 使用知识库向量检索时，还需要 Embedding API；Reranker 可选；语音输入需要 OpenAI 兼容语音识别 API
 
 内网离线安装时，先在联网的 Ubuntu 22.04 x86_64 构建机执行 `deploy/export-offline.sh`，再把生成的镜像包导入目标机。
 
@@ -105,7 +106,7 @@ Copy-Item .env.example .env
 - 初始管理员 `ADMIN_INITIAL_*`
 - OAuth2 服务与客户端参数
 
-Embedding、Reranker 和语音识别默认模型不再通过 `.env` 配置。先在 `/admin/models` 注册模型，再在同一页面保存默认模型。
+Embedding、Reranker 和语音识别默认模型不再通过 `.env` 配置。先在 `/admin/models` 注册模型，再在同一页面保存默认模型。语音识别统一按 OpenAI 兼容接口调用：API 地址填写为 `http://<模型服务器>:<端口>/v1`，模型名填写服务实际暴露的 id，例如 `Qwen/Qwen3-ASR-1.7B`，系统会调用 `/audio/transcriptions + file`。浏览器录音会在前端编码为 `wav` 后上传，避免本地开发环境依赖 ffmpeg；Docker AI 镜像仍内置 ffmpeg 作为格式转换兜底。
 
 ## 本地启动
 
@@ -181,7 +182,7 @@ cd ..\ai-service
 - Vue 构建与 Nginx HTTP/HTTPS 网关
 - Spring Boot 后端
 - FastAPI、Tesseract、`chi_sim`、`eng` 和中文字体
-- LibreOffice 和 PyMuPDF，用于旧 Office 文件转换与扫描版 PDF OCR
+- LibreOffice、PyMuPDF 和 ffmpeg，用于旧 Office 文件转换、扫描版 PDF OCR 与浏览器录音格式转换
 - PostgreSQL、MinIO 和用于 Spring Session 的 Redis
 - 健康检查、启动依赖、资源限制和持久卷
 - 默认域名 `ai.sitp.ac.cn`；域名和端口由部署配置管理

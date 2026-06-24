@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import DOMPurify from 'dompurify'
 import {
   ElDropdown, ElDropdownItem, ElDropdownMenu, ElOption, ElProgress, ElSelect, ElTag,
@@ -39,6 +39,7 @@ import {
   RotateCcw,
   Trash2,
   Users,
+  X,
 } from 'lucide-vue-next'
 
 // Domain contracts mirror the JSON returned by Spring Boot and the normalized SSE protocol.
@@ -224,11 +225,18 @@ const attachments = ref<UploadedFile[]>([])
 const uploadingFile = ref(false)
 const recordingVoice = ref(false)
 const transcribingVoice = ref(false)
+const voiceDurationSeconds = ref(0)
 const thinkingEnabled = ref(false)
 const followLatest = ref(true)
 let abortController: AbortController | null = null
-let voiceRecorder: MediaRecorder | null = null
-let voiceChunks: Blob[] = []
+let voiceStream: MediaStream | null = null
+let voiceAudioContext: AudioContext | null = null
+let voiceSource: MediaStreamAudioSourceNode | null = null
+let voiceProcessor: ScriptProcessorNode | null = null
+let voicePcmChunks: Float32Array[] = []
+let voiceSampleRate = 16000
+let voiceShouldTranscribe = false
+let voiceTimer: number | null = null
 
 // Configure GitHub-flavored Markdown once; every rendered result is sanitized below.
 marked.setOptions({ gfm: true, breaks: true })
@@ -241,6 +249,11 @@ const currentUserSubtitle = computed(() => {
   const user = currentUser.value
   if (!user) return ''
   return user.userNumber ? `工号 ${user.userNumber}` : user.accountNumber || user.idNo || ''
+})
+const voiceDurationLabel = computed(() => {
+  const minutes = Math.floor(voiceDurationSeconds.value / 60).toString().padStart(2, '0')
+  const seconds = (voiceDurationSeconds.value % 60).toString().padStart(2, '0')
+  return `${minutes}:${seconds}`
 })
 const selectedModelCapabilities = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.capabilities ?? []
@@ -350,8 +363,32 @@ const copyMessage = async (content: string, index: number) => {
 const resizeComposer = () => {
   const textarea = promptInput.value
   if (!textarea) return
-  textarea.style.height = 'auto'
-  textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
+  textarea.style.height = '0px'
+  const nextHeight = Math.min(textarea.scrollHeight, 180)
+  textarea.style.height = `${nextHeight}px`
+  textarea.style.overflowY = textarea.scrollHeight > 180 ? 'auto' : 'hidden'
+}
+
+watch(prompt, () => {
+  void nextTick(() => {
+    resizeComposer()
+    window.requestAnimationFrame(resizeComposer)
+  })
+})
+
+const normalizeSpeechText = (value: string) => {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+const appendSpeechText = (existing: string, recognized: string) => {
+  const text = normalizeSpeechText(recognized)
+  if (!text) return existing
+  if (!existing.trim()) return text
+  if (/\s$/.test(existing)) return `${existing}${text}`
+  const last = existing.at(-1) ?? ''
+  const first = text.at(0) ?? ''
+  const joiner = /[\u4e00-\u9fff]/.test(last) || /[\u4e00-\u9fff]/.test(first) ? '' : ' '
+  return `${existing}${joiner}${text}`
 }
 
 /** Loads selectable model registrations through the Java business-service boundary. */
@@ -487,60 +524,153 @@ const uploadFiles = async (event: Event) => {
   }
 }
 
-/** Records audio locally in the browser, then sends it to the intranet speech model for transcription. */
-const toggleVoiceInput = async () => {
-  if (recordingVoice.value) {
-    voiceRecorder?.stop()
-    return
+const clearVoiceTimer = () => {
+  if (voiceTimer !== null) {
+    window.clearInterval(voiceTimer)
+    voiceTimer = null
   }
-  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+}
+
+const stopVoiceTracks = () => {
+  voiceProcessor?.disconnect()
+  voiceSource?.disconnect()
+  void voiceAudioContext?.close()
+  voiceProcessor = null
+  voiceSource = null
+  voiceAudioContext = null
+  voiceStream?.getTracks().forEach((track) => track.stop())
+  voiceStream = null
+}
+
+const downsampleAudio = (samples: Float32Array, sourceRate: number, targetRate = 16000) => {
+  if (sourceRate <= targetRate) return samples
+  const ratio = sourceRate / targetRate
+  const length = Math.floor(samples.length / ratio)
+  const result = new Float32Array(length)
+  for (let index = 0; index < length; index += 1) {
+    const start = Math.floor(index * ratio)
+    const end = Math.min(Math.floor((index + 1) * ratio), samples.length)
+    let total = 0
+    for (let cursor = start; cursor < end; cursor += 1) total += samples[cursor]
+    result[index] = total / Math.max(end - start, 1)
+  }
+  return result
+}
+
+const encodeWav = (chunks: Float32Array[], sampleRate: number) => {
+  const mergedLength = chunks.reduce((total, chunk) => total + chunk.length, 0)
+  const merged = new Float32Array(mergedLength)
+  let offset = 0
+  chunks.forEach((chunk) => {
+    merged.set(chunk, offset)
+    offset += chunk.length
+  })
+  const pcm = downsampleAudio(merged, sampleRate)
+  const buffer = new ArrayBuffer(44 + pcm.length * 2)
+  const view = new DataView(buffer)
+  const writeString = (position: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) view.setUint8(position + index, value.charCodeAt(index))
+  }
+  writeString(0, 'RIFF')
+  view.setUint32(4, 36 + pcm.length * 2, true)
+  writeString(8, 'WAVE')
+  writeString(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, Math.min(sampleRate, 16000), true)
+  view.setUint32(28, Math.min(sampleRate, 16000) * 2, true)
+  view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true)
+  writeString(36, 'data')
+  view.setUint32(40, pcm.length * 2, true)
+  let position = 44
+  pcm.forEach((sample) => {
+    const clamped = Math.max(-1, Math.min(1, sample))
+    view.setInt16(position, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true)
+    position += 2
+  })
+  return new Blob([buffer], { type: 'audio/wav' })
+}
+
+const transcribeVoiceBlob = async (audio: Blob) => {
+  if (!audio.size) return
+  transcribingVoice.value = true
+  try {
+    const body = new FormData()
+    body.append('file', audio, 'recording.wav')
+    const response = await fetch('/api/speech/transcribe', { method: 'POST', body })
+    if (!response.ok) {
+      const error = await response.json().catch(() => null)
+      throw new Error(error?.message || '语音识别失败')
+    }
+    const result: { text?: string } = await response.json()
+    const recognized = result.text?.trim()
+    if (recognized) {
+      prompt.value = appendSpeechText(prompt.value, recognized)
+      await nextTick()
+      resizeComposer()
+      promptInput.value?.focus()
+    }
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : '语音识别失败，请确认已配置内网语音识别模型。')
+  } finally {
+    transcribingVoice.value = false
+  }
+}
+
+/** Starts a local browser recording; transcription is only sent after explicit confirmation. */
+const startVoiceInput = async () => {
+  if (recordingVoice.value || transcribingVoice.value) return
+  const AudioContextConstructor = window.AudioContext
+    || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  if (!navigator.mediaDevices?.getUserMedia || !AudioContextConstructor) {
     window.alert('当前浏览器不支持本地录音，请使用新版 Chrome、Edge 或 Firefox。')
     return
   }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm'
-    voiceChunks = []
-    voiceRecorder = new MediaRecorder(stream, { mimeType })
-    voiceRecorder.ondataavailable = (event) => {
-      if (event.data.size) voiceChunks.push(event.data)
+    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    voiceAudioContext = new AudioContextConstructor()
+    voiceSampleRate = voiceAudioContext.sampleRate
+    voiceSource = voiceAudioContext.createMediaStreamSource(voiceStream)
+    voiceProcessor = voiceAudioContext.createScriptProcessor(4096, 1, 1)
+    voicePcmChunks = []
+    voiceShouldTranscribe = false
+    voiceDurationSeconds.value = 0
+    voiceProcessor.onaudioprocess = (event) => {
+      if (!recordingVoice.value) return
+      voicePcmChunks.push(new Float32Array(event.inputBuffer.getChannelData(0)))
     }
-    voiceRecorder.onstop = async () => {
-      stream.getTracks().forEach((track) => track.stop())
-      recordingVoice.value = false
-      const audio = new Blob(voiceChunks, { type: mimeType })
-      voiceChunks = []
-      if (!audio.size) return
-      transcribingVoice.value = true
-      try {
-        const body = new FormData()
-        body.append('file', audio, 'recording.webm')
-        const response = await fetch('/api/speech/transcribe', { method: 'POST', body })
-        if (!response.ok) {
-          const error = await response.json().catch(() => null)
-          throw new Error(error?.message || '语音识别失败')
-        }
-        const result: { text?: string } = await response.json()
-        const recognized = result.text?.trim()
-        if (recognized) {
-          prompt.value = prompt.value ? `${prompt.value}\n${recognized}` : recognized
-          await nextTick()
-          resizeComposer()
-          promptInput.value?.focus()
-        }
-      } catch (error) {
-        window.alert(error instanceof Error ? error.message : '语音识别失败，请确认已配置内网语音识别模型。')
-      } finally {
-        transcribingVoice.value = false
-      }
-    }
-    voiceRecorder.start()
+    voiceSource.connect(voiceProcessor)
+    voiceProcessor.connect(voiceAudioContext.destination)
     recordingVoice.value = true
+    voiceTimer = window.setInterval(() => {
+      voiceDurationSeconds.value += 1
+    }, 1000)
   } catch {
     window.alert('无法访问麦克风，请确认浏览器麦克风权限已允许。')
   }
+}
+
+const finishVoiceInput = () => {
+  if (!recordingVoice.value) return
+  voiceShouldTranscribe = true
+  const audio = encodeWav(voicePcmChunks, voiceSampleRate)
+  clearVoiceTimer()
+  stopVoiceTracks()
+  recordingVoice.value = false
+  voicePcmChunks = []
+  voiceShouldTranscribe = false
+  void transcribeVoiceBlob(audio)
+}
+
+const cancelVoiceInput = () => {
+  if (!recordingVoice.value) return
+  voiceShouldTranscribe = false
+  clearVoiceTimer()
+  stopVoiceTracks()
+  recordingVoice.value = false
+  voicePcmChunks = []
 }
 
 /** Polls briefly because title generation intentionally runs after the first chat response. */
@@ -1135,16 +1265,35 @@ onMounted(async () => {
               <ElProgress v-if="file.status === 'uploaded' || file.status === 'processing'" :percentage="100" :show-text="false" :stroke-width="2" status="warning" :indeterminate="true" :duration="1.5" />
             </div>
           </div>
-          <textarea
-            ref="promptInput"
-            v-model="prompt"
-            rows="1"
-            placeholder="给智能工作台发送消息"
-            :disabled="isGenerating"
-            @input="resizeComposer"
-            @keydown="handleComposerKeydown"
-          ></textarea>
-          <div class="composer-toolbar">
+          <div v-if="recordingVoice || transcribingVoice" class="voice-recorder-panel">
+            <div class="voice-recorder-status">
+              <span class="voice-pulse"><Mic :size="18" /></span>
+              <div>
+                <strong>{{ transcribingVoice ? '正在识别语音' : '正在录音' }}</strong>
+                <small>{{ transcribingVoice ? '请稍候，正在调用内网语音模型' : voiceDurationLabel }}</small>
+              </div>
+            </div>
+            <div v-if="recordingVoice" class="voice-bars" aria-hidden="true">
+              <span v-for="index in 18" :key="index"></span>
+            </div>
+            <div v-if="recordingVoice" class="voice-recorder-actions">
+              <button class="voice-cancel-button" type="button" title="取消录音" :disabled="transcribingVoice" @click="cancelVoiceInput"><X :size="18" /></button>
+              <button class="voice-confirm-button" type="button" title="完成录音并识别" :disabled="transcribingVoice" @click="finishVoiceInput"><Check :size="19" /></button>
+            </div>
+          </div>
+          <template v-else>
+            <textarea
+              ref="promptInput"
+              v-model="prompt"
+              rows="1"
+              placeholder="给智能工作台发送消息"
+              :disabled="isGenerating"
+              @focus="resizeComposer"
+              @input="resizeComposer"
+              @keydown="handleComposerKeydown"
+            ></textarea>
+          </template>
+          <div v-if="!recordingVoice && !transcribingVoice" class="composer-toolbar">
             <div class="input-tools">
               <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
               <button class="icon-button" type="button" title="上传文件或图片" :disabled="uploadingFile" @click="fileInput?.click()"><Paperclip :size="19" /></button>
@@ -1152,9 +1301,9 @@ onMounted(async () => {
                 class="icon-button voice-button"
                 :class="{ recording: recordingVoice }"
                 type="button"
-                :title="recordingVoice ? '停止录音并识别' : transcribingVoice ? '正在识别语音' : '语音输入'"
+                title="语音输入"
                 :disabled="isGenerating || transcribingVoice"
-                @click="toggleVoiceInput"
+                @click="startVoiceInput"
               ><Mic :size="19" /></button>
               <ElDropdown trigger="click" placement="top-start" @command="selectKnowledgeBase">
                 <button class="knowledge-button" :class="{ active: selectedKnowledgeBaseNames }" type="button" :title="selectedKnowledgeBaseNames || '选择知识库'">
@@ -1188,7 +1337,7 @@ onMounted(async () => {
             </div>
           </div>
         </div>
-        <p class="composer-note">{{ recordingVoice ? '正在录音，再次点击麦克风结束并识别' : transcribingVoice ? '正在使用内网语音模型识别...' : '内容由 AI 生成，请核实重要信息' }}</p>
+        <p class="composer-note">{{ recordingVoice ? '点击对号完成识别，点击叉号取消本次录音' : transcribingVoice ? '正在使用内网语音模型识别...' : '内容由 AI 生成，请核实重要信息' }}</p>
       </footer>
 
       <div v-if="templateManagerOpen" class="template-manager-backdrop" @click.self="templateManagerOpen = false">

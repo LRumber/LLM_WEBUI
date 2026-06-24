@@ -95,6 +95,7 @@ public class AuthController {
             session.setAttribute(UserSession.USER_ID_KEY, user.id());
             session.setAttribute(UserSession.USER_KEY, user);
             if (user.administrator()) {
+                session.setMaxInactiveInterval(AdminSession.MAX_INACTIVE_SECONDS);
                 session.setAttribute(AdminSession.PRINCIPAL_KEY, new AdminPrincipal(
                         user.id(), user.accountNumber(), user.displayName(), "oauth2"
                 ));

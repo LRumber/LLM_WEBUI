@@ -32,6 +32,7 @@ public class AdminAuthController {
                 .<ResponseEntity<?>>map(principal -> {
                     HttpSession session = request.getSession(true);
                     request.changeSessionId();
+                    session.setMaxInactiveInterval(AdminSession.MAX_INACTIVE_SECONDS);
                     session.setAttribute(AdminSession.PRINCIPAL_KEY, principal);
                     return ResponseEntity.ok(principal);
                 })

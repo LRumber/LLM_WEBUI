@@ -134,6 +134,13 @@ interface PromptTemplate {
   enabled: boolean
 }
 
+interface PlatformAnnouncement {
+  id: string
+  title: string
+  body: string
+  published: boolean
+}
+
 interface UploadedFile {
   id: string
   originalName: string
@@ -220,6 +227,7 @@ const selectedTemplateId = ref('')
 const templateManagerOpen = ref(false)
 const editingTemplateId = ref<string | null>(null)
 const templateForm = ref({ name: '', description: '', systemPrompt: '' })
+const activeAnnouncement = ref<PlatformAnnouncement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const attachments = ref<UploadedFile[]>([])
 const uploadingFile = ref(false)
@@ -237,6 +245,7 @@ let voicePcmChunks: Float32Array[] = []
 let voiceSampleRate = 16000
 let voiceShouldTranscribe = false
 let voiceTimer: number | null = null
+const ANNOUNCEMENT_SEEN_PREFIX = 'lm-platform-announcement-seen:'
 
 // Configure GitHub-flavored Markdown once; every rendered result is sanitized below.
 marked.setOptions({ gfm: true, breaks: true })
@@ -435,6 +444,30 @@ const loadKnowledgeBases = async () => {
   } catch {
     knowledgeBases.value = []
   }
+}
+
+/** Shows the latest published announcement once per browser and revision. */
+const loadAnnouncement = async () => {
+  try {
+    const response = await fetch('/api/announcement/current')
+    if (response.status === 204) {
+      activeAnnouncement.value = null
+      return
+    }
+    if (!response.ok) return
+    const announcement: PlatformAnnouncement = await response.json()
+    const seenKey = `${ANNOUNCEMENT_SEEN_PREFIX}${announcement.id}`
+    activeAnnouncement.value = window.localStorage.getItem(seenKey) ? null : announcement
+  } catch {
+    activeAnnouncement.value = null
+  }
+}
+
+const dismissAnnouncement = () => {
+  if (activeAnnouncement.value?.id) {
+    window.localStorage.setItem(`${ANNOUNCEMENT_SEEN_PREFIX}${activeAnnouncement.value.id}`, '1')
+  }
+  activeAnnouncement.value = null
 }
 
 /** Polls durable processing state so extracted content is ready before a message can be sent. */
@@ -1000,7 +1033,7 @@ onMounted(async () => {
     userSessionChecked.value = true
   }
   if (currentUser.value && isWorkspace.value) {
-    await Promise.all([loadModels(), loadConversations(), loadPromptTemplates(), loadKnowledgeBases()])
+    await Promise.all([loadModels(), loadConversations(), loadPromptTemplates(), loadKnowledgeBases(), loadAnnouncement()])
   }
 })
 </script>
@@ -1339,6 +1372,22 @@ onMounted(async () => {
         </div>
         <p class="composer-note">{{ recordingVoice ? '点击对号完成识别，点击叉号取消本次录音' : transcribingVoice ? '正在使用内网语音模型识别...' : '内容由 AI 生成，请核实重要信息' }}</p>
       </footer>
+
+      <div v-if="activeAnnouncement" class="announcement-modal-backdrop" @click.self="dismissAnnouncement">
+        <section class="announcement-modal" role="dialog" aria-modal="true" aria-labelledby="announcement-title">
+          <header>
+            <div>
+              <span>平台更新</span>
+              <h2 id="announcement-title">{{ activeAnnouncement.title }}</h2>
+            </div>
+            <button type="button" title="关闭公告" @click="dismissAnnouncement"><X :size="18" /></button>
+          </header>
+          <p>{{ activeAnnouncement.body }}</p>
+          <footer>
+            <button type="button" @click="dismissAnnouncement">我知道了</button>
+          </footer>
+        </section>
+      </div>
 
       <div v-if="templateManagerOpen" class="template-manager-backdrop" @click.self="templateManagerOpen = false">
         <section class="template-manager">

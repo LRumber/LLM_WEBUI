@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   Activity,
   Bot,
@@ -72,6 +72,13 @@ interface ModelSettings {
   speechModel: string
 }
 
+interface PlatformAnnouncement {
+  id: string
+  title: string
+  body: string
+  published: boolean
+}
+
 interface PromptTemplate {
   id: string
   name: string
@@ -109,11 +116,16 @@ const modelDiscoverMessage = ref('')
 const modelSettings = ref<ModelSettings>({ embeddingModel: '', rerankerModel: '', speechModel: '' })
 const modelSettingsSaving = ref(false)
 const modelSettingsMessage = ref('')
+const announcement = ref<PlatformAnnouncement>({ id: '0', title: '', body: '', published: false })
+const announcementSaving = ref(false)
+const announcementMessage = ref('')
 const modelForm = ref<ModelRegistration>({
   key: '', display_name: '', provider: 'openai-compatible', engine: 'openai-compatible', category: 'language', base_url: '', model_name: '',
   capabilities: ['chat'], enabled: true, frontend_visible: true, context_window: 32768, api_key: '',
 })
 const templateForm = ref({ id: '', name: '', description: '', systemPrompt: '', enabled: true })
+const ADMIN_IDLE_TIMEOUT_MS = 60 * 60 * 1000
+let adminIdleTimer: number | null = null
 
 const adminPage = computed(() => resolveAdminPage(window.location.pathname))
 const pageMeta = computed(() => adminPageMeta[adminPage.value])
@@ -162,6 +174,8 @@ const loadCurrentPage = async () => {
       await loadModels()
     } else if (adminPage.value === 'prompts') {
       await loadSystemTemplates()
+    } else if (adminPage.value === 'settings') {
+      await loadAnnouncement()
     }
   } catch {
     loadError.value = true
@@ -185,6 +199,47 @@ const loadModels = async () => {
     if (settingsResponse.ok) modelSettings.value = await settingsResponse.json()
   } catch {
     models.value = []
+  }
+}
+
+/** Loads the editable user-facing product announcement. */
+const loadAnnouncement = async () => {
+  try {
+    const response = await fetch('/api/admin/announcement')
+    if (response.status === 401) {
+      currentAdmin.value = null
+      return
+    }
+    if (response.ok) announcement.value = await response.json()
+  } catch {
+    announcementMessage.value = '公告配置暂时不可用'
+  }
+}
+
+/** Saves a draft or published announcement and bumps the user-visible revision. */
+const saveAnnouncement = async () => {
+  announcementSaving.value = true
+  announcementMessage.value = ''
+  try {
+    const response = await fetch('/api/admin/announcement', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: announcement.value.title,
+        body: announcement.value.body,
+        published: announcement.value.published,
+      }),
+    })
+    if (!response.ok) {
+      const detail = await response.text()
+      throw new Error(detail || `HTTP ${response.status}`)
+    }
+    announcement.value = await response.json()
+    announcementMessage.value = announcement.value.published ? '公告已发布，用户将看到一次弹窗' : '公告已保存为草稿'
+  } catch (error) {
+    announcementMessage.value = `保存失败：${error instanceof Error ? error.message : '后台服务不可用'}`
+  } finally {
+    announcementSaving.value = false
   }
 }
 
@@ -217,11 +272,38 @@ const loadSystemTemplates = async () => {
   systemTemplates.value = response.ok ? await response.json() : []
 }
 
+const clearAdminIdleTimer = () => {
+  if (adminIdleTimer !== null) {
+    window.clearTimeout(adminIdleTimer)
+    adminIdleTimer = null
+  }
+}
+
+const logout = async () => {
+  clearAdminIdleTimer()
+  await fetch('/api/admin/auth/logout', { method: 'POST' })
+  currentAdmin.value = null
+  users.value = []
+}
+
+const resetAdminIdleTimer = () => {
+  if (!currentAdmin.value) return
+  clearAdminIdleTimer()
+  adminIdleTimer = window.setTimeout(() => {
+    void logout()
+  }, ADMIN_IDLE_TIMEOUT_MS)
+}
+
+const handleAdminActivity = () => {
+  resetAdminIdleTimer()
+}
+
 const checkSession = async () => {
   try {
     const response = await fetch('/api/admin/auth/me')
     if (response.ok) {
       currentAdmin.value = await response.json()
+      resetAdminIdleTimer()
       await loadCurrentPage()
     }
   } finally {
@@ -244,18 +326,13 @@ const login = async () => {
     }
     currentAdmin.value = await response.json()
     loginPassword.value = ''
+    resetAdminIdleTimer()
     await loadCurrentPage()
   } catch {
     loginError.value = '无法连接管理服务'
   } finally {
     loginSubmitting.value = false
   }
-}
-
-const logout = async () => {
-  await fetch('/api/admin/auth/logout', { method: 'POST' })
-  currentAdmin.value = null
-  users.value = []
 }
 
 const setAdministrator = async (user: AdminUser) => {
@@ -475,7 +552,17 @@ const saveSystemTemplate = async () => {
   }
 }
 
-onMounted(checkSession)
+const adminActivityEvents = ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'] as const
+
+onMounted(() => {
+  adminActivityEvents.forEach((event) => window.addEventListener(event, handleAdminActivity, { passive: true }))
+  void checkSession()
+})
+
+onUnmounted(() => {
+  adminActivityEvents.forEach((event) => window.removeEventListener(event, handleAdminActivity))
+  clearAdminIdleTimer()
+})
 </script>
 
 <template>
@@ -664,6 +751,22 @@ onMounted(checkSession)
 
       <section v-if="adminPage === 'settings'" class="admin-panel settings-panel">
         <div class="panel-heading"><div><h2>系统设置</h2><p>这里展示运行策略。域名、HTTP/HTTPS 端口由部署文件和反向代理固定管理。</p></div></div>
+        <form class="announcement-form" @submit.prevent="saveAnnouncement">
+          <div class="announcement-heading">
+            <div>
+              <strong>前台发布公告</strong>
+              <span>用于发布新模型、新功能或维护通知；每次保存都会生成新版本，已发布版本会对每位用户弹窗一次。</span>
+            </div>
+            <label><input v-model="announcement.published" type="checkbox" />发布到前台</label>
+          </div>
+          <label>公告标题<input v-model="announcement.title" maxlength="120" placeholder="例如：新模型已上线" /></label>
+          <label>公告内容<textarea v-model="announcement.body" maxlength="5000" rows="6" placeholder="说明本次更新内容、影响范围或使用入口"></textarea></label>
+          <div class="announcement-actions">
+            <span v-if="announcementMessage">{{ announcementMessage }}</span>
+            <small>当前版本：{{ announcement.id || '0' }}</small>
+            <button type="submit" :disabled="announcementSaving">{{ announcementSaving ? '保存中…' : '保存公告' }}</button>
+          </div>
+        </form>
         <div class="settings-grid"><article><strong>访问地址</strong><span>由 Docker Compose、nginx 与证书配置决定，部署后不在后台动态修改</span></article><article><strong>认证模式</strong><span>本地管理员 + OAuth2 用户</span></article><article><strong>对象存储</strong><span>MinIO 私有 Bucket</span></article><article><strong>异步任务</strong><span>有界后台执行器</span></article><article><strong>模型默认值</strong><span>Embedding、Reranker、语音识别在模型管理中维护</span></article><article><strong>安全原则</strong><span>密钥不写入浏览器，部署参数不通过页面热修改</span></article></div>
       </section>
     </section>
@@ -704,7 +807,8 @@ onMounted(checkSession)
 .usage-chart { min-height: 190px; display: flex; align-items: flex-end; gap: 14px; padding: 25px 8px 0; opacity: 1; transition: opacity .15s; }.usage-chart.loading { opacity: .45; }.usage-column { min-width: 0; height: 165px; display: flex; flex: 1; flex-direction: column; align-items: center; }.bar-area { width: min(44px, 70%); height: 112px; display: flex; align-items: flex-end; }.usage-bar { width: 100%; min-height: 4px; background: linear-gradient(180deg, #42a887, #197559); border-radius: 5px 5px 2px 2px; }.usage-column strong { margin-top: 8px; color: #59615e; font-size: 10px; }.usage-column span { margin-top: 5px; color: #949a98; font-size: 10px; }.empty-chart { width: 100%; align-self: center; color: #9aa09e; text-align: center; font-size: 12px; }
 .table-wrap { margin-top: 16px; overflow-x: auto; }table { width: 100%; border-collapse: collapse; font-size: 12px; }th { padding: 10px 12px; color: #8a918e; background: #f7f8f8; font-size: 10px; font-weight: 600; text-align: left; }td { padding: 12px; color: #59615e; border-bottom: 1px solid #eef0ef; }.table-user { display: flex; align-items: center; gap: 9px; }.table-user > span { width: 27px; height: 27px; display: grid; place-items: center; color: #fff; background: #527a6d; border-radius: 50%; font-size: 10px; }.table-user strong { color: #303633; font-size: 12px; }.status-pill { padding: 3px 7px; color: #197357; background: #e9f5f0; border-radius: 10px; font-size: 10px; }.status-pill.inactive { color: #8b4941; background: #f8eae8; }.empty-table { padding: 28px; color: #969c99; text-align: center; }
 .admin-toggle { display: flex; align-items: center; gap: 6px; padding: 0; color: #7d8582; background: transparent; border: 0; font-size: 10px; }.admin-toggle > span { position: relative; width: 26px; height: 15px; background: #cdd2d0; border-radius: 8px; transition: background .15s; }.admin-toggle > span::after { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; content: ''; background: #fff; border-radius: 50%; transition: transform .15s; }.admin-toggle.enabled { color: #176f55; }.admin-toggle.enabled > span { background: #27856a; }.admin-toggle.enabled > span::after { transform: translateX(11px); }
+.announcement-form { display: grid; gap: 12px; margin-top: 16px; padding: 15px; background: #f8faf9; border: 1px solid #e2e7e4; border-radius: 8px; }.announcement-heading { display: flex; justify-content: space-between; gap: 16px; }.announcement-heading strong, .announcement-heading span { display: block; }.announcement-heading strong { color: #303633; font-size: 12px; }.announcement-heading span { max-width: 720px; margin-top: 5px; color: #7c8581; font-size: 10px; line-height: 1.6; }.announcement-heading label { display: flex; align-items: center; gap: 7px; color: #23765d; font-size: 11px; font-weight: 600; white-space: nowrap; }.announcement-form > label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.announcement-form input:not([type=checkbox]), .announcement-form textarea { width: 100%; padding: 8px 10px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; resize: vertical; }.announcement-form input:focus, .announcement-form textarea:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.announcement-actions { display: flex; align-items: center; gap: 10px; }.announcement-actions span { margin-right: auto; color: #66716c; font-size: 10px; }.announcement-actions small { color: #919995; font-size: 10px; }.announcement-actions button { height: 34px; padding: 0 12px; color: #fff; background: #1e745a; border: 0; border-radius: 6px; font-size: 10px; }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }.settings-grid article { padding: 15px; background: #f7f8f8; border: 1px solid #e6e8e7; border-radius: 7px; }.settings-grid strong, .settings-grid span { display: block; }.settings-grid strong { color: #3c4440; font-size: 11px; }.settings-grid span { margin-top: 6px; color: #838b87; font-size: 10px; }
 @media (max-width: 900px) { .admin-sidebar { width: 188px; flex-basis: 188px; }.admin-brand img { width: 62px; }.metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.model-grid { grid-template-columns: 1fr 1fr; }.admin-content { padding: 24px 20px 36px; } }
-@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-defaults, .model-grid, .model-form-grid, .prompt-admin-layout, .settings-grid { grid-template-columns: 1fr; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
+@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-defaults, .model-grid, .model-form-grid, .prompt-admin-layout, .settings-grid { grid-template-columns: 1fr; }.announcement-heading, .announcement-actions { align-items: flex-start; flex-direction: column; }.announcement-actions span { margin-right: 0; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
 </style>

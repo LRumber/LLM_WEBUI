@@ -11,5 +11,5 @@ COMPOSE=(docker compose --env-file "$ROOT_DIR/.env" -f "$DEPLOY_DIR/docker-compo
 "${COMPOSE[@]}" build backend ai-service gateway
 mapfile -t images < <("${COMPOSE[@]}" --profile tools config --images | sort -u)
 docker save -o "$BUNDLE_DIR/lm-platform-images-x86_64.tar" "${images[@]}"
-sha256sum "$BUNDLE_DIR/lm-platform-images-x86_64.tar" > "$BUNDLE_DIR/SHA256SUMS"
+(cd "$BUNDLE_DIR" && sha256sum "lm-platform-images-x86_64.tar" > SHA256SUMS)
 echo "Offline image bundle created in $BUNDLE_DIR"

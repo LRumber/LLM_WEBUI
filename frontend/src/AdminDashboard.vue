@@ -4,7 +4,6 @@ import {
   Activity,
   Bot,
   LayoutDashboard,
-  LockKeyhole,
   LogOut,
   MessageSquare,
   RefreshCw,
@@ -41,6 +40,10 @@ interface AdminUser {
   lastLoginAt: string | null
   conversationCount: number
   totalTokens: number
+  apiTotalQuota: number
+  apiUsedTokens: number
+  apiRequestCount: number
+  apiKeyCount: number
 }
 
 interface AdminPrincipal {
@@ -61,7 +64,7 @@ interface ModelRegistration {
   capabilities: string[]
   enabled: boolean
   frontend_visible: boolean
-  context_window?: number
+  context_window?: number | string
   api_key_env?: string
   api_key?: string
 }
@@ -74,9 +77,44 @@ interface ModelSettings {
 
 interface PlatformAnnouncement {
   id: string
+  version: string
   title: string
   body: string
   published: boolean
+  createdAt: string
+  updatedAt: string
+  publishedAt: string | null
+}
+
+interface AdminApiOverview {
+  enabledKeyCount: number
+  enabledModelCount: number
+  todayRequestCount: number
+  todayTokenCount: number
+  totalRequestCount: number
+  totalTokenCount: number
+}
+
+interface AdminApiModel {
+  key: string
+  displayName: string
+  category: string
+  capabilities: string[]
+  contextWindow?: number
+  apiEnabled: boolean
+  available: boolean
+}
+
+interface AdminApiKey {
+  id: string
+  userId: number
+  accountNumber: string
+  displayName: string
+  name: string
+  maskedKey: string
+  enabled: boolean
+  createdAt: string
+  lastUsedAt?: string | null
 }
 
 interface PromptTemplate {
@@ -95,8 +133,25 @@ const overview = ref<AdminOverview>({
   todayTokenCount: 0,
 })
 const dailyUsage = ref<DailyUsage[]>([])
+const apiDailyUsage = ref<DailyUsage[]>([])
 const users = ref<AdminUser[]>([])
+const userSearch = ref('')
+const userPage = ref(0)
+const userPageSize = ref(20)
+const userTotal = ref(0)
 const models = ref<ModelRegistration[]>([])
+const apiOverview = ref<AdminApiOverview>({
+  enabledKeyCount: 0,
+  enabledModelCount: 0,
+  todayRequestCount: 0,
+  todayTokenCount: 0,
+  totalRequestCount: 0,
+  totalTokenCount: 0,
+})
+const apiModels = ref<AdminApiModel[]>([])
+const apiKeys = ref<AdminApiKey[]>([])
+const apiManagementError = ref('')
+const announcements = ref<PlatformAnnouncement[]>([])
 const systemTemplates = ref<PromptTemplate[]>([])
 const loading = ref(true)
 const loadError = ref(false)
@@ -116,9 +171,11 @@ const modelDiscoverMessage = ref('')
 const modelSettings = ref<ModelSettings>({ embeddingModel: '', rerankerModel: '', speechModel: '' })
 const modelSettingsSaving = ref(false)
 const modelSettingsMessage = ref('')
-const announcement = ref<PlatformAnnouncement>({ id: '0', title: '', body: '', published: false })
 const announcementSaving = ref(false)
 const announcementMessage = ref('')
+const announcementForm = ref({ id: '', version: '', title: '', body: '', published: true })
+const announcementEditorOpen = ref(false)
+const announcementDetail = ref<PlatformAnnouncement | null>(null)
 const modelForm = ref<ModelRegistration>({
   key: '', display_name: '', provider: 'openai-compatible', engine: 'openai-compatible', category: 'language', base_url: '', model_name: '',
   capabilities: ['chat'], enabled: true, frontend_visible: true, context_window: 32768, api_key: '',
@@ -127,12 +184,26 @@ const templateForm = ref({ id: '', name: '', description: '', systemPrompt: '', 
 const ADMIN_IDLE_TIMEOUT_MS = 60 * 60 * 1000
 let adminIdleTimer: number | null = null
 
+const contextWindowOptions = [
+  { label: '8K', value: 8192 },
+  { label: '16K', value: 16384 },
+  { label: '32K', value: 32768 },
+  { label: '64K', value: 65536 },
+  { label: '128K', value: 131072 },
+  { label: '256K', value: 262144 },
+  { label: '1M', value: 1048576 },
+]
+
 const adminPage = computed(() => resolveAdminPage(window.location.pathname))
 const pageMeta = computed(() => adminPageMeta[adminPage.value])
 
 const maxDailyTokens = computed(() => {
   return Math.max(...dailyUsage.value.map((day) => day.inputTokens + day.outputTokens), 1)
 })
+const maxApiDailyTokens = computed(() => {
+  return Math.max(...apiDailyUsage.value.map((day) => day.inputTokens + day.outputTokens), 1)
+})
+const totalUserPages = computed(() => Math.max(1, Math.ceil(userTotal.value / userPageSize.value)))
 const embeddingModels = computed(() => models.value.filter((model) => model.enabled && model.category === 'embedding'))
 const rerankerModels = computed(() => models.value.filter((model) => model.enabled && model.category === 'rerank'))
 const speechModels = computed(() => models.value.filter((model) => model.enabled && model.category === 'speech'))
@@ -143,8 +214,27 @@ const missingRerankerModel = computed(() => modelSettings.value.rerankerModel
 const missingSpeechModel = computed(() => modelSettings.value.speechModel
   && !speechModels.value.some((model) => model.key === modelSettings.value.speechModel))
 const adminSidebarName = computed(() => currentAdmin.value?.username || 'admin')
+const publishedAnnouncements = computed(() => announcements.value.filter((item) => item.published))
 
 const formatNumber = (value: number) => new Intl.NumberFormat('zh-CN').format(value)
+const parseContextWindow = (value?: number | string | null) => {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? Math.floor(value) : null
+  const normalized = value.trim().toLowerCase()
+  const match = normalized.match(/^(\d+(?:\.\d+)?)\s*([km])?$/)
+  if (!match) return null
+  const amount = Number(match[1])
+  const multiplier = match[2] === 'm' ? 1024 * 1024 : match[2] === 'k' ? 1024 : 1
+  const parsed = Math.round(amount * multiplier)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+const formatContextWindow = (value?: number | string | null) => {
+  const parsed = parseContextWindow(value)
+  if (!parsed) return '-'
+  if (parsed % 1048576 === 0) return `${parsed / 1048576}M`
+  if (parsed % 1024 === 0) return `${parsed / 1024}K`
+  return formatNumber(parsed)
+}
 const formatDate = (value: string) => new Intl.DateTimeFormat('zh-CN', {
   month: 'numeric',
   day: 'numeric',
@@ -153,29 +243,67 @@ const formatDateTime = (value: string | null) => value
   ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
   : '尚未登录'
 
+const loadUsers = async () => {
+  const params = new URLSearchParams({
+    page: String(userPage.value),
+    size: String(userPageSize.value),
+  })
+  const query = userSearch.value.trim()
+  if (query) params.set('q', query)
+  const response = await fetch(`/api/admin/users?${params.toString()}`)
+  if (!response.ok) throw new Error('Users unavailable')
+  const payload = await response.json()
+  users.value = payload.users ?? []
+  userTotal.value = payload.total ?? users.value.length
+  userPage.value = payload.page ?? userPage.value
+  userPageSize.value = payload.size ?? userPageSize.value
+}
+
 /** Loads only the API data required by the current administration route. */
 const loadCurrentPage = async () => {
   loading.value = true
   loadError.value = false
   try {
     if (adminPage.value === 'overview') {
-      const response = await fetch('/api/admin/overview')
+      const [response, apiResponse] = await Promise.all([
+        fetch('/api/admin/overview'),
+        fetch('/api/admin/api/overview'),
+      ])
       if (!response.ok) throw new Error('Overview unavailable')
       overview.value = await response.json()
+      if (apiResponse.ok) apiOverview.value = await apiResponse.json()
     } else if (adminPage.value === 'users') {
-      const response = await fetch('/api/admin/users')
-      if (!response.ok) throw new Error('Users unavailable')
-      users.value = await response.json()
+      await loadUsers()
     } else if (adminPage.value === 'usage') {
-      const response = await fetch('/api/admin/usage/daily?days=7')
-      if (!response.ok) throw new Error('Usage unavailable')
+      const [response, apiResponse] = await Promise.all([
+        fetch('/api/admin/usage/daily?days=7'),
+        fetch('/api/admin/api/usage/daily?days=7'),
+      ])
+      if (!response.ok || !apiResponse.ok) throw new Error('Usage unavailable')
       dailyUsage.value = await response.json()
+      apiDailyUsage.value = await apiResponse.json()
     } else if (adminPage.value === 'models') {
       await loadModels()
+    } else if (adminPage.value === 'api') {
+      apiManagementError.value = ''
+      const [overviewResponse, modelsResponse, keysResponse] = await Promise.all([
+        fetch('/api/admin/api/overview'),
+        fetch('/api/admin/api/models'),
+        fetch('/api/admin/api/keys'),
+      ])
+      if (!overviewResponse.ok || !modelsResponse.ok || !keysResponse.ok) {
+        throw new Error('API management unavailable')
+      }
+      apiOverview.value = await overviewResponse.json()
+      apiModels.value = await modelsResponse.json()
+      apiKeys.value = await keysResponse.json()
+      if (!apiModels.value.length) {
+        apiManagementError.value = '暂未获取到模型列表，请确认 AI 服务已启动，并且模型管理中已添加模型。'
+      }
     } else if (adminPage.value === 'prompts') {
       await loadSystemTemplates()
-    } else if (adminPage.value === 'settings') {
-      await loadAnnouncement()
+    } else if (adminPage.value === 'announcements') {
+      await loadAnnouncements()
     }
   } catch {
     loadError.value = true
@@ -202,40 +330,66 @@ const loadModels = async () => {
   }
 }
 
-/** Loads the editable user-facing product announcement. */
-const loadAnnouncement = async () => {
+/** Loads historical user-facing product announcements for the dedicated admin module. */
+const loadAnnouncements = async () => {
   try {
-    const response = await fetch('/api/admin/announcement')
+    const response = await fetch('/api/admin/announcements')
     if (response.status === 401) {
       currentAdmin.value = null
       return
     }
-    if (response.ok) announcement.value = await response.json()
+    announcements.value = response.ok ? await response.json() : []
   } catch {
-    announcementMessage.value = '公告配置暂时不可用'
+    announcements.value = []
+    announcementMessage.value = '公告列表暂时不可用'
   }
 }
 
-/** Saves a draft or published announcement and bumps the user-visible revision. */
+const createAnnouncement = () => {
+  announcementForm.value = { id: '', version: '', title: '', body: '', published: true }
+  announcementMessage.value = ''
+  announcementEditorOpen.value = true
+}
+
+const editAnnouncement = (item: PlatformAnnouncement) => {
+  announcementDetail.value = item
+  announcementMessage.value = ''
+}
+
+/** Creates or updates one announcement while preserving the historical list. */
 const saveAnnouncement = async () => {
   announcementSaving.value = true
   announcementMessage.value = ''
   try {
-    const response = await fetch('/api/admin/announcement', {
-      method: 'PUT',
+    const createResponse = await fetch('/api/admin/announcements', {
+      method: 'POST',
+      credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        title: announcement.value.title,
-        body: announcement.value.body,
-        published: announcement.value.published,
+        version: announcementForm.value.version,
+        title: announcementForm.value.title,
+        body: announcementForm.value.body,
+        published: true,
       }),
     })
-    if (!response.ok) {
-      const detail = await response.text()
-      throw new Error(detail || `HTTP ${response.status}`)
+    if (createResponse.status === 401) {
+      currentAdmin.value = null
+      announcementMessage.value = '登录状态已过期，请重新登录后台后再保存。'
+      return
     }
-    announcement.value = await response.json()
-    announcementMessage.value = announcement.value.published ? '公告已发布，用户将看到一次弹窗' : '公告已保存为草稿'
+    if (createResponse.status === 403) {
+      announcementMessage.value = '当前账号没有保存公告的权限，请确认已使用管理员账号登录。'
+      return
+    }
+    if (!createResponse.ok) {
+      const detail = await createResponse.text()
+      throw new Error(detail || `HTTP ${createResponse.status}`)
+    }
+    const created: PlatformAnnouncement = await createResponse.json()
+    await loadAnnouncements()
+    announcementDetail.value = created
+    announcementEditorOpen.value = false
+    announcementMessage.value = '公告已发布，用户将看到一次弹窗'
   } catch (error) {
     announcementMessage.value = `保存失败：${error instanceof Error ? error.message : '后台服务不可用'}`
   } finally {
@@ -482,6 +636,12 @@ const saveModel = async () => {
       modelSaveError.value = '模型保存失败：请选择或填写模型名称。'
       return
     }
+    const contextWindow = parseContextWindow(modelForm.value.context_window)
+    if (!contextWindow) {
+      modelSaveError.value = '上下文窗口格式不正确：请选择 8K、32K、128K 等选项，或填写类似 96K、131072 的值。'
+      return
+    }
+    modelForm.value.context_window = contextWindow
     modelForm.value.engine = 'openai-compatible'
     if (modelForm.value.category === 'embedding') {
       modelForm.value.capabilities = ['embedding']
@@ -518,6 +678,61 @@ const deleteModel = async (model: ModelRegistration) => {
   if (!window.confirm(`确定移除模型注册“${model.display_name}”吗？模型文件不会被删除。`)) return
   const response = await fetch(`/api/admin/models/${encodeURIComponent(model.key)}`, { method: 'DELETE' })
   if (response.ok) await loadModels()
+}
+
+const setApiModelEnabled = async (model: AdminApiModel) => {
+  const response = await fetch(`/api/admin/api/models/${encodeURIComponent(model.key)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: !model.apiEnabled }),
+  })
+  if (response.ok) await loadCurrentPage()
+}
+
+const searchUsers = async () => {
+  userPage.value = 0
+  loading.value = true
+  try {
+    await loadUsers()
+  } catch {
+    loadError.value = true
+  } finally {
+    loading.value = false
+  }
+}
+
+const changeUserPage = async (page: number) => {
+  userPage.value = Math.max(0, Math.min(page, totalUserPages.value - 1))
+  loading.value = true
+  try {
+    await loadUsers()
+  } catch {
+    loadError.value = true
+  } finally {
+    loading.value = false
+  }
+}
+
+const setApiQuota = async (user: AdminUser) => {
+  const value = window.prompt(`设置 ${user.displayName} 的 API 总 Token 额度`, String(user.apiTotalQuota))
+  if (value === null) return
+  const totalQuota = Number(value)
+  if (!Number.isFinite(totalQuota) || totalQuota < 0) return window.alert('请输入不小于 0 的数字')
+  const response = await fetch(`/api/admin/api/users/${user.id}/quota`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ totalQuota: Math.floor(totalQuota) }),
+  })
+  if (response.ok) await loadCurrentPage()
+}
+
+const setApiKeyEnabled = async (key: AdminApiKey) => {
+  const response = await fetch(`/api/admin/api/keys/${key.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: !key.enabled }),
+  })
+  if (response.ok) await loadCurrentPage()
 }
 
 /** Executes a bounded readiness probe and keeps the latest result beside its model. */
@@ -568,7 +783,7 @@ onUnmounted(() => {
 <template>
   <main v-if="sessionChecked && !currentAdmin" class="admin-login-page">
     <section class="admin-login-card">
-      <div class="admin-login-mark"><LockKeyhole :size="23" /></div>
+      <div class="admin-login-mark"><img src="/brand/sitp-logo.jpg" alt="SITP" /></div>
       <p class="admin-login-eyebrow">智能工作台</p>
       <h1>管理后台登录</h1>
       <p class="admin-login-copy">使用本地管理账号登录，与 OAuth2 业务账号相互独立。</p>
@@ -594,7 +809,9 @@ onUnmounted(() => {
         <a :class="{ active: adminPage === 'users' }" href="/admin/users"><Users :size="18" />用户管理</a>
         <a :class="{ active: adminPage === 'usage' }" href="/admin/usage"><Activity :size="18" />用量统计</a>
         <a :class="{ active: adminPage === 'models' }" href="/admin/models"><Bot :size="18" />模型管理</a>
+        <a :class="{ active: adminPage === 'api' }" href="/admin/api"><Zap :size="18" />API 管理</a>
         <a :class="{ active: adminPage === 'prompts' }" href="/admin/prompts"><MessageSquare :size="18" />提示词模板</a>
+        <a :class="{ active: adminPage === 'announcements' }" href="/admin/announcements"><MessageSquare :size="18" />公告管理</a>
         <a :class="{ active: adminPage === 'settings' }" href="/admin/settings"><Settings :size="18" />系统设置</a>
       </nav>
       <div class="admin-sidebar-footer">
@@ -619,6 +836,19 @@ onUnmounted(() => {
         <article><span class="metric-icon orange"><Zap :size="20" /></span><div><small>今日请求</small><strong>{{ formatNumber(overview.todayRequestCount) }}</strong></div></article>
         <article><span class="metric-icon purple"><Activity :size="20" /></span><div><small>今日 Token</small><strong>{{ formatNumber(overview.todayTokenCount) }}</strong></div></article>
       </div>
+
+      <section v-if="adminPage === 'overview'" class="admin-panel api-overview-panel">
+        <div class="panel-heading">
+          <div><h2>API 中转站</h2><p>独立统计开放 API 的 Key、模型与调用量，不计入网页对话用量</p></div>
+          <a class="panel-link" href="/admin/api">进入 API 管理</a>
+        </div>
+        <div class="metric-grid compact">
+          <article><span class="metric-icon green"><Zap :size="20" /></span><div><small>启用 Key</small><strong>{{ formatNumber(apiOverview.enabledKeyCount) }}</strong></div></article>
+          <article><span class="metric-icon blue"><Bot :size="20" /></span><div><small>开放模型</small><strong>{{ formatNumber(apiOverview.enabledModelCount) }}</strong></div></article>
+          <article><span class="metric-icon orange"><Activity :size="20" /></span><div><small>今日 API 请求</small><strong>{{ formatNumber(apiOverview.todayRequestCount) }}</strong></div></article>
+          <article><span class="metric-icon purple"><MessageSquare :size="20" /></span><div><small>今日 API Token</small><strong>{{ formatNumber(apiOverview.todayTokenCount) }}</strong></div></article>
+        </div>
+      </section>
 
       <section v-if="adminPage === 'models'" class="admin-panel model-panel">
         <div class="panel-heading">
@@ -653,11 +883,66 @@ onUnmounted(() => {
         <div class="model-grid">
           <article v-for="model in models" :key="model.key" class="model-card">
             <div class="model-card-heading"><span><Bot :size="18" /></span><div><strong>{{ model.display_name }}</strong><small>{{ model.key }}</small></div><i :class="{ enabled: model.enabled }">{{ model.enabled ? '启用' : '停用' }}</i></div>
-            <dl><div><dt>类型</dt><dd>{{ ({ language: '大语言模型', multimodal: '多模态', embedding: 'Embedding', rerank: 'Rerank', speech: '语音识别' } as Record<string, string>)[model.category] }}</dd></div><div><dt>运行</dt><dd>{{ model.enabled ? '启用' : '停用' }}</dd></div><div><dt>前台展示</dt><dd>{{ model.frontend_visible ? '展示' : '隐藏' }}</dd></div><div><dt>上下文</dt><dd>{{ model.context_window || '-' }}</dd></div></dl>
+            <dl><div><dt>类型</dt><dd>{{ ({ language: '大语言模型', multimodal: '多模态', embedding: 'Embedding', rerank: 'Rerank', speech: '语音识别' } as Record<string, string>)[model.category] }}</dd></div><div><dt>运行</dt><dd>{{ model.enabled ? '启用' : '停用' }}</dd></div><div><dt>前台展示</dt><dd>{{ model.frontend_visible ? '展示' : '隐藏' }}</dd></div><div><dt>上下文</dt><dd>{{ formatContextWindow(model.context_window) }}</dd></div></dl>
             <p>{{ model.base_url }}</p>
             <div class="model-card-actions"><button type="button" @click="checkModel(model)">{{ modelHealth[model.key] || '健康检查' }}</button><button type="button" @click="editModel(model)">编辑</button><button class="danger" type="button" @click="deleteModel(model)">移除</button></div>
           </article>
           <p v-if="!models.length" class="model-empty">AI 服务尚无模型注册或当前不可用。</p>
+        </div>
+      </section>
+
+      <section v-if="adminPage === 'api'" class="admin-panel api-admin-panel">
+        <div class="panel-heading">
+          <div><h2>API 管理</h2><p>统一 API 的模型开放与 Key 状态管理</p></div>
+          <a class="panel-link" href="/app/api-platform">查看前台 API 开发平台</a>
+        </div>
+
+        <div class="metric-grid compact">
+          <article><span class="metric-icon green"><Zap :size="20" /></span><div><small>启用 Key</small><strong>{{ formatNumber(apiOverview.enabledKeyCount) }}</strong></div></article>
+          <article><span class="metric-icon blue"><Bot :size="20" /></span><div><small>开放模型</small><strong>{{ formatNumber(apiOverview.enabledModelCount) }}</strong></div></article>
+          <article><span class="metric-icon orange"><Activity :size="20" /></span><div><small>累计 API 请求</small><strong>{{ formatNumber(apiOverview.totalRequestCount) }}</strong></div></article>
+          <article><span class="metric-icon purple"><MessageSquare :size="20" /></span><div><small>累计 API Token</small><strong>{{ formatNumber(apiOverview.totalTokenCount) }}</strong></div></article>
+        </div>
+        <p v-if="apiManagementError" class="api-admin-notice">{{ apiManagementError }}</p>
+
+        <div class="api-admin-section">
+          <div class="panel-heading slim"><div><h2>开放模型</h2><p>API 中转站可调用模型独立控制，不受前台对话展示开关影响</p></div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>模型</th><th>类型</th><th>能力</th><th>上下文</th><th>API 开放</th></tr></thead>
+              <tbody>
+                <tr v-for="model in apiModels" :key="model.key">
+                  <td><strong>{{ model.displayName }}</strong><br /><small>{{ model.key }}</small></td>
+                  <td>{{ model.available ? model.category : '当前不可用' }}</td>
+                  <td>{{ model.capabilities.join(', ') || '-' }}</td>
+                  <td>{{ formatContextWindow(model.contextWindow) }}</td>
+                  <td><button class="admin-toggle" :class="{ enabled: model.apiEnabled }" type="button" @click="setApiModelEnabled(model)"><span></span>{{ model.apiEnabled ? (model.available ? '已开放' : '已开放但不可调用') : '未开放' }}</button></td>
+                </tr>
+                <tr v-if="!apiModels.length && !loading"><td colspan="5" class="empty-table">暂无可配置模型</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="api-admin-section">
+          <div class="panel-heading slim"><div><h2>API Keys</h2><p>管理员只能查看脱敏 Key，可禁用异常 Key，不能查看完整密钥</p></div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>用户</th><th>Key 名称</th><th>脱敏 Key</th><th>状态</th><th>创建时间</th><th>最近使用</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr v-for="key in apiKeys" :key="key.id">
+                  <td><strong>{{ key.displayName }}</strong><br /><small>{{ key.accountNumber }}</small></td>
+                  <td>{{ key.name }}</td>
+                  <td><code>{{ key.maskedKey }}</code></td>
+                  <td><span class="status-pill" :class="{ inactive: !key.enabled }">{{ key.enabled ? '启用' : '禁用' }}</span></td>
+                  <td>{{ formatDateTime(key.createdAt) }}</td>
+                  <td>{{ formatDateTime(key.lastUsedAt || null) }}</td>
+                  <td><button class="admin-toggle" :class="{ enabled: key.enabled }" type="button" @click="setApiKeyEnabled(key)"><span></span>{{ key.enabled ? '禁用' : '启用' }}</button></td>
+                </tr>
+                <tr v-if="!apiKeys.length && !loading"><td colspan="7" class="empty-table">暂无 API Key</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -677,6 +962,56 @@ onUnmounted(() => {
         </div>
       </section>
 
+      <section v-if="adminPage === 'announcements'" class="admin-panel announcement-panel">
+        <div class="panel-heading">
+          <div><h2>公告管理</h2><p>发布新模型、新功能或维护通知，前台用户每个发布版本只弹窗一次</p></div>
+          <button class="panel-action" type="button" @click="createAnnouncement">新增公告</button>
+        </div>
+        <div class="announcement-layout">
+          <div class="announcement-list">
+            <article
+              v-for="item in publishedAnnouncements"
+              :key="item.id"
+              :class="{ active: item.id === announcementDetail?.id, locked: item.published }"
+              :title="item.published ? '已发布公告暂不支持编辑，请新增一条公告' : '编辑草稿公告'"
+              @click="editAnnouncement(item)"
+            >
+              <div><strong>{{ item.version }} · {{ item.title }}</strong><span :class="{ off: !item.published }">{{ item.published ? '已发布' : '草稿' }}</span></div>
+              <p>{{ item.body }}</p>
+              <small>{{ item.publishedAt ? `发布：${formatDateTime(item.publishedAt)}` : `更新：${formatDateTime(item.updatedAt)}` }}</small>
+            </article>
+            <p v-if="!publishedAnnouncements.length" class="announcement-empty">暂无历史公告</p>
+          </div>
+        </div>
+      </section>
+
+      <div v-if="announcementEditorOpen" class="admin-modal-backdrop">
+        <form class="admin-modal announcement-editor-modal" @submit.prevent="saveAnnouncement">
+          <div class="panel-heading">
+            <div><h2>新增公告</h2><p>公告保存后会立即发布，并作为一个新的版本记录。</p></div>
+            <button class="editor-close" type="button" @click="announcementEditorOpen = false">×</button>
+          </div>
+          <label>版本号<input v-model="announcementForm.version" maxlength="64" placeholder="例如：V1.2.0 或 2026.06" required /></label>
+          <label>公告标题<input v-model="announcementForm.title" maxlength="120" placeholder="例如：新模型已上线" required /></label>
+          <label>更新内容<textarea v-model="announcementForm.body" maxlength="5000" rows="9" placeholder="说明本次更新内容、影响范围或使用入口" required></textarea></label>
+          <div class="announcement-actions fixed">
+            <span v-if="announcementMessage">{{ announcementMessage }}</span>
+            <button type="button" @click="announcementEditorOpen = false">取消</button>
+            <button class="primary" type="submit" :disabled="announcementSaving">{{ announcementSaving ? '发布中…' : '发布公告' }}</button>
+          </div>
+        </form>
+      </div>
+
+      <div v-if="announcementDetail" class="admin-modal-backdrop" @click.self="announcementDetail = null">
+        <section class="admin-modal announcement-detail-modal">
+          <div class="panel-heading">
+            <div><h2>{{ announcementDetail.version }} · {{ announcementDetail.title }}</h2><p>{{ announcementDetail.publishedAt ? `发布：${formatDateTime(announcementDetail.publishedAt)}` : `更新：${formatDateTime(announcementDetail.updatedAt)}` }}</p></div>
+            <button class="editor-close" type="button" @click="announcementDetail = null">×</button>
+          </div>
+          <p>{{ announcementDetail.body }}</p>
+        </section>
+      </div>
+
       <div v-if="adminPage === 'models' && modelEditorOpen" class="model-editor-backdrop">
         <form class="model-editor" @submit.prevent="saveModel">
           <div class="panel-heading"><div><h2>{{ models.some((item) => item.key === modelForm.key) ? '编辑模型' : '接入模型 API' }}</h2><p>填写 OpenAI 兼容 API 地址和密钥后识别模型</p></div><button class="editor-close" type="button" @click="modelEditorOpen = false">×</button></div>
@@ -692,7 +1027,11 @@ onUnmounted(() => {
                 <ElOption label="语音识别服务" value="speech" />
               </ElSelect>
             </label>
-            <label>上下文窗口<input v-model.number="modelForm.context_window" type="number" min="1" /></label>
+            <label>上下文窗口
+              <ElSelect v-model="modelForm.context_window" class="admin-select" popper-class="admin-select-dropdown" filterable allow-create default-first-option>
+                <ElOption v-for="option in contextWindowOptions" :key="option.value" :label="option.label" :value="option.value" />
+              </ElSelect>
+            </label>
             <label class="wide">API 地址<input v-model="modelForm.base_url" type="url" placeholder="http://127.0.0.1:8000/v1" required /></label>
             <label class="wide">API Key<input v-model="modelForm.api_key" type="password" autocomplete="new-password" placeholder="编辑时留空表示保留原密钥" /></label>
             <div class="wide discovery-row">
@@ -714,24 +1053,47 @@ onUnmounted(() => {
       </div>
 
       <section v-if="adminPage === 'usage'" class="admin-panel usage-panel">
-        <div class="panel-heading"><div><h2>近 7 天用量</h2><p>每日输入与输出 Token 总量</p></div></div>
-        <div class="usage-chart" :class="{ loading }">
-          <div v-for="day in dailyUsage" :key="day.date" class="usage-column">
-            <div class="bar-area" :title="`${formatNumber(day.inputTokens + day.outputTokens)} Token`">
-              <div class="usage-bar" :style="{ height: `${Math.max(4, ((day.inputTokens + day.outputTokens) / maxDailyTokens) * 100)}%` }"></div>
+        <div class="panel-heading"><div><h2>近 7 天用量</h2><p>对话与 API 独立统计，每日输入与输出 Token 总量</p></div></div>
+        <div class="usage-split">
+          <article>
+            <div class="panel-heading slim"><div><h2>对话用量</h2><p>网页工作台对话请求</p></div></div>
+            <div class="usage-chart" :class="{ loading }">
+              <div v-for="day in dailyUsage" :key="day.date" class="usage-column">
+                <div class="bar-area" :title="`${formatNumber(day.inputTokens + day.outputTokens)} Token`">
+                  <div class="usage-bar" :style="{ height: `${Math.max(4, ((day.inputTokens + day.outputTokens) / maxDailyTokens) * 100)}%` }"></div>
+                </div>
+                <strong>{{ formatNumber(day.requestCount) }} 次</strong>
+                <span>{{ formatDate(day.date) }}</span>
+              </div>
+              <p v-if="!dailyUsage.length && !loading" class="empty-chart">暂无对话用量数据</p>
             </div>
-            <strong>{{ formatNumber(day.requestCount) }} 次</strong>
-            <span>{{ formatDate(day.date) }}</span>
-          </div>
-          <p v-if="!dailyUsage.length && !loading" class="empty-chart">暂无用量数据</p>
+          </article>
+          <article>
+            <div class="panel-heading slim"><div><h2>API 用量</h2><p>API 中转站每日使用 Token 数</p></div></div>
+            <div class="usage-chart" :class="{ loading }">
+              <div v-for="day in apiDailyUsage" :key="day.date" class="usage-column">
+                <div class="bar-area" :title="`${formatNumber(day.inputTokens + day.outputTokens)} Token`">
+                  <div class="usage-bar api" :style="{ height: `${Math.max(4, ((day.inputTokens + day.outputTokens) / maxApiDailyTokens) * 100)}%` }"></div>
+                </div>
+                <strong>{{ formatNumber(day.inputTokens + day.outputTokens) }} Token</strong>
+                <span>{{ formatDate(day.date) }}</span>
+              </div>
+              <p v-if="!apiDailyUsage.length && !loading" class="empty-chart">暂无 API 用量数据</p>
+            </div>
+          </article>
         </div>
       </section>
 
       <section v-if="adminPage === 'users'" class="admin-panel user-panel">
-        <div class="panel-heading"><div><h2>用户概况</h2><p>最近同步的 100 个影子用户及累计用量</p></div><span>{{ users.length }} 位用户</span></div>
+        <div class="panel-heading"><div><h2>用户概况</h2><p>所有 OAuth2 影子用户、权限、对话用量与 API 额度</p></div><span>共 {{ formatNumber(userTotal) }} 位用户</span></div>
+        <form class="user-search" @submit.prevent="searchUsers">
+          <input v-model="userSearch" type="search" placeholder="搜索姓名、账号、工号、邮箱" />
+          <button type="submit">搜索</button>
+          <button type="button" @click="userSearch = ''; searchUsers()">清空</button>
+        </form>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>用户</th><th>账号</th><th>状态</th><th>后台权限</th><th>团队权限</th><th>会话数</th><th>累计 Token</th><th>最近登录</th></tr></thead>
+            <thead><tr><th>用户</th><th>账号</th><th>状态</th><th>后台权限</th><th>团队权限</th><th>会话数</th><th>对话 Token</th><th>API 总额度</th><th>API 已用</th><th>API 请求</th><th>Key 数</th><th>最近登录</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="user in users" :key="user.id">
                 <td><div class="table-user"><span>{{ user.displayName.slice(0, 1) }}</span><strong>{{ user.displayName }}</strong></div></td>
@@ -741,32 +1103,26 @@ onUnmounted(() => {
                 <td><button class="admin-toggle" :class="{ enabled: user.teamAdministrator }" type="button" @click="setTeamAdministrator(user)"><span></span>{{ user.teamAdministrator ? '团队管理员' : '普通成员' }}</button></td>
                 <td>{{ formatNumber(user.conversationCount) }}</td>
                 <td>{{ formatNumber(user.totalTokens) }}</td>
+                <td>{{ formatNumber(user.apiTotalQuota) }}</td>
+                <td>{{ formatNumber(user.apiUsedTokens) }}</td>
+                <td>{{ formatNumber(user.apiRequestCount) }}</td>
+                <td>{{ formatNumber(user.apiKeyCount) }}</td>
                 <td>{{ formatDateTime(user.lastLoginAt) }}</td>
+                <td><button class="table-action" type="button" @click="setApiQuota(user)">设置额度</button></td>
               </tr>
-              <tr v-if="!users.length && !loading"><td colspan="8" class="empty-table">暂无用户数据</td></tr>
+              <tr v-if="!users.length && !loading"><td colspan="13" class="empty-table">暂无用户数据</td></tr>
             </tbody>
           </table>
+        </div>
+        <div class="pagination-row">
+          <button type="button" :disabled="userPage <= 0 || loading" @click="changeUserPage(userPage - 1)">上一页</button>
+          <span>第 {{ userPage + 1 }} / {{ totalUserPages }} 页</span>
+          <button type="button" :disabled="userPage + 1 >= totalUserPages || loading" @click="changeUserPage(userPage + 1)">下一页</button>
         </div>
       </section>
 
       <section v-if="adminPage === 'settings'" class="admin-panel settings-panel">
         <div class="panel-heading"><div><h2>系统设置</h2><p>这里展示运行策略。域名、HTTP/HTTPS 端口由部署文件和反向代理固定管理。</p></div></div>
-        <form class="announcement-form" @submit.prevent="saveAnnouncement">
-          <div class="announcement-heading">
-            <div>
-              <strong>前台发布公告</strong>
-              <span>用于发布新模型、新功能或维护通知；每次保存都会生成新版本，已发布版本会对每位用户弹窗一次。</span>
-            </div>
-            <label><input v-model="announcement.published" type="checkbox" />发布到前台</label>
-          </div>
-          <label>公告标题<input v-model="announcement.title" maxlength="120" placeholder="例如：新模型已上线" /></label>
-          <label>公告内容<textarea v-model="announcement.body" maxlength="5000" rows="6" placeholder="说明本次更新内容、影响范围或使用入口"></textarea></label>
-          <div class="announcement-actions">
-            <span v-if="announcementMessage">{{ announcementMessage }}</span>
-            <small>当前版本：{{ announcement.id || '0' }}</small>
-            <button type="submit" :disabled="announcementSaving">{{ announcementSaving ? '保存中…' : '保存公告' }}</button>
-          </div>
-        </form>
         <div class="settings-grid"><article><strong>访问地址</strong><span>由 Docker Compose、nginx 与证书配置决定，部署后不在后台动态修改</span></article><article><strong>认证模式</strong><span>本地管理员 + OAuth2 用户</span></article><article><strong>对象存储</strong><span>MinIO 私有 Bucket</span></article><article><strong>异步任务</strong><span>有界后台执行器</span></article><article><strong>模型默认值</strong><span>Embedding、Reranker、语音识别在模型管理中维护</span></article><article><strong>安全原则</strong><span>密钥不写入浏览器，部署参数不通过页面热修改</span></article></div>
       </section>
     </section>
@@ -775,8 +1131,8 @@ onUnmounted(() => {
 
 <style scoped>
 .admin-login-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; color: #29302d; background: radial-gradient(circle at 50% 0, #edf5f2, #f5f6f7 45%); }
-.admin-login-card { width: min(100%, 390px); padding: 34px; background: #fff; border: 1px solid #e1e5e3; border-radius: 13px; box-shadow: 0 18px 50px rgba(28, 50, 42, .09); }.admin-login-mark { width: 46px; height: 46px; display: grid; place-items: center; margin-bottom: 19px; color: #fff; background: #1c6f57; border-radius: 11px; }.admin-login-eyebrow { margin: 0 0 5px; color: #298166; font-size: 11px; font-weight: 700; letter-spacing: .08em; }.admin-login-card h1 { margin: 0; font-size: 24px; }.admin-login-copy { margin: 10px 0 23px; color: #7b8380; font-size: 12px; line-height: 1.6; }.admin-login-card form { display: grid; gap: 14px; }.admin-login-card label { display: grid; gap: 6px; color: #555e5a; font-size: 11px; font-weight: 600; }.admin-login-card input { height: 39px; padding: 0 11px; color: #2e3431; background: #fff; border: 1px solid #d6dbd8; border-radius: 7px; outline: 0; }.admin-login-card input:focus { border-color: #4f8f7b; box-shadow: 0 0 0 3px #e8f2ef; }.admin-login-card form > button { height: 41px; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 3px; color: #fff; background: #1d7159; border: 0; border-radius: 7px; font-weight: 600; }.admin-login-card form > button:hover:not(:disabled) { background: #155d48; }.admin-login-card > a { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 20px; color: #7b8380; text-decoration: none; font-size: 11px; }.login-error { margin: -4px 0 0; color: #a14338; font-size: 11px; }
-.admin-shell { min-height: 100vh; display: flex; color: #252a2e; background: #f5f6f7; }
+.admin-login-card { width: min(100%, 390px); padding: 34px; text-align: center; background: #fff; border: 1px solid #e1e5e3; border-radius: 13px; box-shadow: 0 18px 50px rgba(28, 50, 42, .09); }.admin-login-mark { width: 150px; display: grid; place-items: center; margin: 0 auto 19px; }.admin-login-mark img { display: block; width: 100%; height: auto; }.admin-login-eyebrow { margin: 0 0 5px; color: #298166; font-size: 11px; font-weight: 700; letter-spacing: .08em; }.admin-login-card h1 { margin: 0; font-size: 24px; }.admin-login-copy { margin: 10px 0 23px; color: #7b8380; font-size: 12px; line-height: 1.6; }.admin-login-card form { display: grid; gap: 14px; text-align: left; }.admin-login-card label { display: grid; gap: 6px; color: #555e5a; font-size: 11px; font-weight: 600; }.admin-login-card input { height: 39px; padding: 0 11px; color: #2e3431; background: #fff; border: 1px solid #d6dbd8; border-radius: 7px; outline: 0; }.admin-login-card input:focus { border-color: #4f8f7b; box-shadow: 0 0 0 3px #e8f2ef; }.admin-login-card form > button { height: 41px; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 3px; color: #fff; background: #1d7159; border: 0; border-radius: 7px; font-weight: 600; }.admin-login-card form > button:hover:not(:disabled) { background: #155d48; }.admin-login-card > a { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 20px; color: #7b8380; text-decoration: none; font-size: 11px; }.login-error { margin: -4px 0 0; color: #a14338; font-size: 11px; text-align: left; }
+.admin-shell { height: 100vh; min-height: 0; display: flex; overflow: hidden; color: #252a2e; background: #f5f6f7; }
 .admin-sidebar { position: sticky; top: 0; width: 232px; height: 100vh; display: flex; flex-direction: column; flex: 0 0 232px; padding: 22px 14px 16px; color: #dce4e1; background: #17231f; }
 .admin-brand { display: flex; align-items: center; gap: 11px; padding: 0 8px 24px; border-bottom: 1px solid rgba(255,255,255,.09); }
 .admin-brand img { width: 77px; border-radius: 3px; }
@@ -788,14 +1144,16 @@ onUnmounted(() => {
 .admin-sidebar nav .disabled { opacity: .48; }.admin-sidebar nav small { margin-left: auto; font-size: 9px; }
 .admin-sidebar-footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding: 13px 10px; border-top: 1px solid rgba(255,255,255,.09); }.admin-sidebar-footer strong, .admin-sidebar-footer span { display: block; }.admin-sidebar-footer strong { color: #e7eeeb; font-size: 11px; }.admin-sidebar-footer span { margin-top: 3px; color: #82958e; font-size: 9px; }.admin-sidebar-footer button { width: 29px; height: 29px; display: grid; place-items: center; color: #aebcb7; background: transparent; border: 0; border-radius: 6px; }.admin-sidebar-footer button:hover { color: #fff; background: #2a3c36; }
 .back-workspace { border-top: 1px solid rgba(255,255,255,.09); border-radius: 0; }.back-workspace:hover { color: #fff; }
-.admin-content { min-width: 0; width: 100%; padding: 30px 34px 45px; }
+.admin-content { min-width: 0; width: 100%; height: 100vh; overflow-y: auto; padding: 30px 34px 45px; }
 .admin-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 25px; }.admin-topbar h1 { margin: 0; font-size: 25px; }.admin-topbar p { margin: 6px 0 0; color: #7b8380; font-size: 13px; }
 .admin-topbar button { height: 35px; display: flex; align-items: center; gap: 7px; padding: 0 12px; color: #46504c; background: #fff; border: 1px solid #d9dddb; border-radius: 7px; }.admin-topbar button:hover:not(:disabled) { background: #f0f3f2; }.spinning { animation: spin 1s linear infinite; }@keyframes spin { to { transform: rotate(360deg); } }
 .admin-error { margin-bottom: 18px; padding: 11px 14px; color: #923f35; background: #fbefed; border: 1px solid #efd2cd; border-radius: 8px; font-size: 12px; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .metric-grid article { min-width: 0; display: flex; align-items: center; gap: 13px; padding: 18px; background: #fff; border: 1px solid #e4e7e5; border-radius: 10px; }.metric-icon { width: 41px; height: 41px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 9px; }.metric-icon.green { color: #14795d; background: #e8f4f0; }.metric-icon.blue { color: #326e9d; background: #eaf2f8; }.metric-icon.orange { color: #a66122; background: #faf0e5; }.metric-icon.purple { color: #75549a; background: #f1ebf7; }
 .metric-grid small, .metric-grid strong { display: block; }.metric-grid small { color: #818885; font-size: 11px; }.metric-grid strong { margin-top: 5px; font-size: 23px; }
+.metric-grid.compact { margin-top: 16px; }.metric-grid.compact article { padding: 15px; background: #fafbfb; }
 .admin-panel { margin-top: 17px; padding: 20px; background: #fff; border: 1px solid #e4e7e5; border-radius: 10px; }.panel-heading { display: flex; align-items: center; justify-content: space-between; }.panel-heading h2 { margin: 0; font-size: 15px; }.panel-heading p { margin: 5px 0 0; color: #8a918e; font-size: 11px; }.panel-heading > span { color: #7c8481; font-size: 11px; }
+.panel-heading.slim { margin-top: 20px; }.panel-link { height: 32px; display: inline-flex; align-items: center; padding: 0 11px; color: #1e745a; background: #eaf4f0; border-radius: 6px; text-decoration: none; font-size: 11px; font-weight: 600; }.panel-link:hover { background: #dceee8; }
 .panel-action { height: 32px; padding: 0 11px; color: #fff; background: #1f765c; border: 0; border-radius: 6px; font-size: 11px; }.panel-action:hover { background: #185f4a; }
 .model-defaults { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 10px; margin-top: 16px; padding: 13px; background: #f7f9f8; border: 1px solid #e3e7e5; border-radius: 8px; }.model-defaults label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.model-defaults button { height: 34px; padding: 0 11px; color: #fff; background: #1e745a; border: 0; border-radius: 6px; font-size: 10px; }.model-defaults span { grid-column: 1 / -1; color: #66716c; font-size: 10px; }
 .admin-select { width: 100%; }.admin-select :deep(.el-select__wrapper) { min-height: 36px; padding: 0 10px; background: #fff; border-radius: 7px; box-shadow: 0 0 0 1px #d8ddda inset; }.admin-select :deep(.el-select__wrapper:hover) { box-shadow: 0 0 0 1px #bfc9c4 inset; }.admin-select :deep(.el-select__wrapper.is-focused) { box-shadow: 0 0 0 1px #4e907b inset, 0 0 0 3px #eaf3f0; }.admin-select :deep(.el-select__selected-item) { color: #303633; font-size: 12px; font-weight: 500; }.admin-select :deep(.el-select__caret) { color: #7d8783; }
@@ -804,11 +1162,13 @@ onUnmounted(() => {
 .model-editor-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(20, 28, 25, .45); }.model-editor { width: min(100%, 680px); max-height: calc(100vh - 40px); overflow-y: auto; padding: 22px; background: #fff; border-radius: 11px; box-shadow: 0 20px 60px rgba(0,0,0,.2); }.editor-close { width: 30px; height: 30px; color: #737b78; background: transparent; border: 0; border-radius: 6px; font-size: 21px; }.editor-close:hover { background: #f0f2f1; }.model-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 20px; }.model-form-grid label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.model-form-grid label.wide { grid-column: 1 / -1; }.model-form-grid input:not([type=checkbox]), .model-form-grid select { width: 100%; height: 36px; padding: 0 9px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; }.model-form-grid input:focus, .model-form-grid select:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.model-form-grid .model-enabled { display: flex; grid-column: 1 / -1; align-items: center; gap: 8px; }.model-save-error { margin: 14px 0 0; padding: 10px 12px; color: #9b3f34; background: #fbefed; border: 1px solid #efd1cb; border-radius: 7px; font-size: 11px; line-height: 1.55; white-space: pre-wrap; }.editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 21px; }.editor-actions button { height: 34px; padding: 0 13px; color: #606966; background: #f4f6f5; border: 1px solid #dde1df; border-radius: 6px; }.editor-actions button.primary { color: #fff; background: #1e745a; border-color: #1e745a; }
 .discovery-row { display: flex; align-items: center; gap: 9px; }.discovery-row button { height: 33px; padding: 0 10px; color: #176d53; background: #e8f3ef; border: 0; border-radius: 6px; font-size: 10px; }.discovery-row span { color: #66716c; font-size: 10px; line-height: 1.5; }.discovery-row span.error { color: #9b3f34; }
 .prompt-admin-layout { display: grid; grid-template-columns: .8fr 1.2fr; gap: 16px; margin-top: 17px; }.prompt-admin-list { max-height: 290px; overflow-y: auto; }.prompt-admin-list article { padding: 11px; border: 1px solid #e3e6e4; border-radius: 7px; cursor: pointer; }.prompt-admin-list article + article { margin-top: 7px; }.prompt-admin-list article:hover { background: #f7f9f8; }.prompt-admin-list article > div { display: flex; justify-content: space-between; }.prompt-admin-list strong { font-size: 11px; }.prompt-admin-list span { color: #187056; font-size: 9px; }.prompt-admin-list span.off { color: #9a5148; }.prompt-admin-list p { margin: 6px 0 0; color: #8b928f; font-size: 9px; }.prompt-admin-form { display: grid; gap: 10px; }.prompt-admin-form label { display: grid; gap: 5px; color: #5d6662; font-size: 10px; font-weight: 600; }.prompt-admin-form input:not([type=checkbox]), .prompt-admin-form textarea { padding: 8px 9px; border: 1px solid #d8dcda; border-radius: 6px; outline: 0; resize: vertical; }.prompt-admin-form .prompt-enabled { display: flex; align-items: center; gap: 6px; }.prompt-admin-form > button { height: 34px; color: #fff; background: #1e745a; border: 0; border-radius: 6px; }
-.usage-chart { min-height: 190px; display: flex; align-items: flex-end; gap: 14px; padding: 25px 8px 0; opacity: 1; transition: opacity .15s; }.usage-chart.loading { opacity: .45; }.usage-column { min-width: 0; height: 165px; display: flex; flex: 1; flex-direction: column; align-items: center; }.bar-area { width: min(44px, 70%); height: 112px; display: flex; align-items: flex-end; }.usage-bar { width: 100%; min-height: 4px; background: linear-gradient(180deg, #42a887, #197559); border-radius: 5px 5px 2px 2px; }.usage-column strong { margin-top: 8px; color: #59615e; font-size: 10px; }.usage-column span { margin-top: 5px; color: #949a98; font-size: 10px; }.empty-chart { width: 100%; align-self: center; color: #9aa09e; text-align: center; font-size: 12px; }
+.usage-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 10px; }.usage-split > article { min-width: 0; padding: 14px; background: #f9fbfa; border: 1px solid #e5e9e7; border-radius: 8px; }.usage-chart { min-height: 190px; display: flex; align-items: flex-end; gap: 14px; padding: 25px 8px 0; opacity: 1; transition: opacity .15s; }.usage-chart.loading { opacity: .45; }.usage-column { min-width: 0; height: 165px; display: flex; flex: 1; flex-direction: column; align-items: center; }.bar-area { width: min(44px, 70%); height: 112px; display: flex; align-items: flex-end; }.usage-bar { width: 100%; min-height: 4px; background: linear-gradient(180deg, #42a887, #197559); border-radius: 5px 5px 2px 2px; }.usage-bar.api { background: linear-gradient(180deg, #5d91d5, #2f68a8); }.usage-column strong { margin-top: 8px; color: #59615e; font-size: 10px; }.usage-column span { margin-top: 5px; color: #949a98; font-size: 10px; }.empty-chart { width: 100%; align-self: center; color: #9aa09e; text-align: center; font-size: 12px; }
 .table-wrap { margin-top: 16px; overflow-x: auto; }table { width: 100%; border-collapse: collapse; font-size: 12px; }th { padding: 10px 12px; color: #8a918e; background: #f7f8f8; font-size: 10px; font-weight: 600; text-align: left; }td { padding: 12px; color: #59615e; border-bottom: 1px solid #eef0ef; }.table-user { display: flex; align-items: center; gap: 9px; }.table-user > span { width: 27px; height: 27px; display: grid; place-items: center; color: #fff; background: #527a6d; border-radius: 50%; font-size: 10px; }.table-user strong { color: #303633; font-size: 12px; }.status-pill { padding: 3px 7px; color: #197357; background: #e9f5f0; border-radius: 10px; font-size: 10px; }.status-pill.inactive { color: #8b4941; background: #f8eae8; }.empty-table { padding: 28px; color: #969c99; text-align: center; }
 .admin-toggle { display: flex; align-items: center; gap: 6px; padding: 0; color: #7d8582; background: transparent; border: 0; font-size: 10px; }.admin-toggle > span { position: relative; width: 26px; height: 15px; background: #cdd2d0; border-radius: 8px; transition: background .15s; }.admin-toggle > span::after { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; content: ''; background: #fff; border-radius: 50%; transition: transform .15s; }.admin-toggle.enabled { color: #176f55; }.admin-toggle.enabled > span { background: #27856a; }.admin-toggle.enabled > span::after { transform: translateX(11px); }
-.announcement-form { display: grid; gap: 12px; margin-top: 16px; padding: 15px; background: #f8faf9; border: 1px solid #e2e7e4; border-radius: 8px; }.announcement-heading { display: flex; justify-content: space-between; gap: 16px; }.announcement-heading strong, .announcement-heading span { display: block; }.announcement-heading strong { color: #303633; font-size: 12px; }.announcement-heading span { max-width: 720px; margin-top: 5px; color: #7c8581; font-size: 10px; line-height: 1.6; }.announcement-heading label { display: flex; align-items: center; gap: 7px; color: #23765d; font-size: 11px; font-weight: 600; white-space: nowrap; }.announcement-form > label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.announcement-form input:not([type=checkbox]), .announcement-form textarea { width: 100%; padding: 8px 10px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; resize: vertical; }.announcement-form input:focus, .announcement-form textarea:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.announcement-actions { display: flex; align-items: center; gap: 10px; }.announcement-actions span { margin-right: auto; color: #66716c; font-size: 10px; }.announcement-actions small { color: #919995; font-size: 10px; }.announcement-actions button { height: 34px; padding: 0 12px; color: #fff; background: #1e745a; border: 0; border-radius: 6px; font-size: 10px; }
+.table-action { height: 28px; padding: 0 9px; color: #176f55; background: #e8f3ef; border: 0; border-radius: 6px; font-size: 10px; }.table-action:hover { background: #dceee8; }.user-search { display: flex; gap: 8px; margin-top: 16px; }.user-search input { min-width: 260px; height: 34px; padding: 0 11px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 7px; outline: 0; }.user-search input:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.user-search button, .pagination-row button { height: 34px; padding: 0 11px; color: #176f55; background: #e8f3ef; border: 0; border-radius: 7px; font-size: 11px; }.user-search button:hover:not(:disabled), .pagination-row button:hover:not(:disabled) { background: #dceee8; }.pagination-row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 14px; color: #66716c; font-size: 11px; }.pagination-row button:disabled { opacity: .45; cursor: not-allowed; }.api-admin-notice { margin: 14px 0 0; padding: 10px 12px; color: #7a5732; background: #fff7e8; border: 1px solid #f1dbb7; border-radius: 7px; font-size: 11px; }.api-admin-section code { color: #2563eb; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }.api-admin-section small { color: #8b9490; font-size: 10px; }
+.announcement-layout { display: block; margin-top: 17px; }.announcement-list { max-height: 560px; overflow-y: auto; padding-right: 4px; }.announcement-list article { padding: 13px; background: #fff; border: 1px solid #e2e6e4; border-radius: 8px; cursor: pointer; }.announcement-list article.locked { cursor: pointer; }.announcement-list article + article { margin-top: 8px; }.announcement-list article:hover, .announcement-list article.active { background: #f5f8f7; border-color: #b9cbc4; }.announcement-list article > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }.announcement-list strong { overflow: hidden; color: #303633; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.announcement-list span { flex: 0 0 auto; padding: 3px 7px; color: #176f55; background: #e9f4ef; border-radius: 10px; font-size: 9px; }.announcement-list span.off { color: #875047; background: #f8ecea; }.announcement-list p { max-height: 42px; overflow: hidden; margin: 8px 0; color: #737c78; font-size: 10px; line-height: 1.45; }.announcement-list small { color: #9aa19e; font-size: 9px; }.announcement-empty { padding: 28px; color: #979f9b; text-align: center; font-size: 11px; }.announcement-form { display: grid; align-content: start; gap: 12px; padding: 16px; background: #f8faf9; border: 1px solid #e2e7e4; border-radius: 8px; }.announcement-form h3 { margin: 0 0 2px; color: #303633; font-size: 13px; }.announcement-form > label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.announcement-form input:not([type=checkbox]), .announcement-form textarea { width: 100%; padding: 8px 10px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; resize: vertical; }.announcement-form input:focus, .announcement-form textarea:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.announcement-published { display: flex !important; align-items: center; gap: 7px; color: #23765d !important; }.announcement-actions { display: flex; align-items: center; gap: 10px; }.announcement-actions span { margin-right: auto; color: #66716c; font-size: 10px; }.announcement-actions button { height: 34px; padding: 0 12px; color: #5f6864; background: #fff; border: 1px solid #d9dfdc; border-radius: 6px; font-size: 10px; }.announcement-actions button.primary { color: #fff; background: #1e745a; border-color: #1e745a; }
+.admin-modal-backdrop { position: fixed; inset: 0; z-index: 55; display: grid; place-items: center; padding: 20px; background: rgba(20, 28, 25, .45); }.admin-modal { width: min(100%, 640px); max-height: calc(100vh - 40px); overflow-y: auto; padding: 22px; background: #fff; border-radius: 11px; box-shadow: 0 20px 60px rgba(0,0,0,.2); }.announcement-editor-modal { display: grid; gap: 13px; }.announcement-editor-modal > label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.announcement-editor-modal input, .announcement-editor-modal textarea { width: 100%; padding: 9px 10px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; resize: vertical; }.announcement-actions.fixed { justify-content: flex-end; }.announcement-actions.fixed span { margin-right: auto; }.announcement-detail-modal p { max-height: 55vh; overflow-y: auto; margin: 16px 0 0; color: #4d5753; font-size: 13px; line-height: 1.75; white-space: pre-wrap; }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }.settings-grid article { padding: 15px; background: #f7f8f8; border: 1px solid #e6e8e7; border-radius: 7px; }.settings-grid strong, .settings-grid span { display: block; }.settings-grid strong { color: #3c4440; font-size: 11px; }.settings-grid span { margin-top: 6px; color: #838b87; font-size: 10px; }
 @media (max-width: 900px) { .admin-sidebar { width: 188px; flex-basis: 188px; }.admin-brand img { width: 62px; }.metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.model-grid { grid-template-columns: 1fr 1fr; }.admin-content { padding: 24px 20px 36px; } }
-@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-defaults, .model-grid, .model-form-grid, .prompt-admin-layout, .settings-grid { grid-template-columns: 1fr; }.announcement-heading, .announcement-actions { align-items: flex-start; flex-direction: column; }.announcement-actions span { margin-right: 0; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
+@media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-defaults, .model-grid, .model-form-grid, .prompt-admin-layout, .announcement-layout, .settings-grid, .usage-split { grid-template-columns: 1fr; }.announcement-actions, .user-search { align-items: flex-start; flex-direction: column; }.user-search input { width: 100%; min-width: 0; }.announcement-actions span { margin-right: 0; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }
 </style>

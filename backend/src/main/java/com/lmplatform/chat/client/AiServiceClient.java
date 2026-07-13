@@ -91,6 +91,51 @@ public class AiServiceClient {
                 .body(String.class);
     }
 
+    /** Forwards a JSON request to a normalized AI-service endpoint and returns the raw JSON response. */
+    public String postJson(String uri, JsonNode body) {
+        return restClient.post()
+                .uri(uri)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve()
+                .body(String.class);
+    }
+
+    /** Returns one registered model so proxy endpoints can expose OpenAI-compatible metadata. */
+    public JsonNode getModel(String key) {
+        String response = restClient.get()
+                .uri("/v1/models/{key}", key)
+                .accept(MediaType.APPLICATION_JSON)
+                .retrieve()
+                .body(String.class);
+        try {
+            return objectMapper.readTree(response);
+        } catch (IOException exception) {
+            throw new IllegalStateException("AI service returned invalid model JSON", exception);
+        }
+    }
+
+    /** Forwards audio transcription uploads to the AI service while preserving the selected model key. */
+    public String transcribeAudioRaw(byte[] content, String filename, String mediaType, String model) {
+        MultipartBodyBuilder body = new MultipartBodyBuilder();
+        body.part("file", new ByteArrayResource(content) {
+            @Override
+            public String getFilename() {
+                return filename;
+            }
+        }).contentType(MediaType.parseMediaType(mediaType));
+        return restClient.post()
+                .uri(uriBuilder -> uriBuilder.path("/v1/audio/transcriptions")
+                        .queryParam("model", model)
+                        .build())
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .accept(MediaType.APPLICATION_JSON)
+                .body(body.build())
+                .retrieve()
+                .body(String.class);
+    }
+
     /** Sends one in-memory object to the isolated parser and returns normalized extraction JSON. */
     public JsonNode parseDocument(byte[] content, String filename, String mediaType) {
         MultipartBodyBuilder body = new MultipartBodyBuilder();

@@ -1,6 +1,7 @@
 package com.lmplatform.admin.repository;
 
 import com.lmplatform.admin.model.AdminOverview;
+import com.lmplatform.admin.model.AdminUserPage;
 import com.lmplatform.admin.model.AdminUserSummary;
 import com.lmplatform.admin.model.DailyUsageSummary;
 import java.time.LocalDate;
@@ -12,6 +13,8 @@ import org.springframework.stereotype.Repository;
 /** Read-only aggregate queries backing the basic administration dashboard. */
 @Repository
 public class AdminRepository {
+
+    private static final long DEFAULT_API_TOKEN_QUOTA = 10_000_000L;
 
     private final JdbcTemplate jdbc;
 
@@ -62,14 +65,36 @@ public class AdminRepository {
         ), days);
     }
 
-    /** Lists recently active users with all-time conversation and token totals. */
-    public List<AdminUserSummary> users() {
-        return jdbc.query("""
+    /** Lists shadow users with search, pagination, conversation usage, and API quota state. */
+    public AdminUserPage users(String query, int page, int size) {
+        String normalizedQuery = query == null ? "" : query.trim().toLowerCase();
+        int normalizedPage = Math.max(0, page);
+        int normalizedSize = Math.max(10, Math.min(size, 100));
+        int offset = normalizedPage * normalizedSize;
+        String pattern = "%" + normalizedQuery + "%";
+        Object[] searchParameters = new Object[] {
+                normalizedQuery, pattern, pattern, pattern, pattern, pattern
+        };
+        long total = jdbc.queryForObject("""
+                SELECT COUNT(*)
+                FROM app_user user_account
+                WHERE (? = ''
+                   OR LOWER(COALESCE(user_account.account_number, '')) LIKE ?
+                   OR LOWER(COALESCE(user_account.display_name, '')) LIKE ?
+                   OR LOWER(COALESCE(user_account.user_number, '')) LIKE ?
+                   OR LOWER(COALESCE(user_account.email, '')) LIKE ?
+                   OR LOWER(COALESCE(user_account.username, '')) LIKE ?)
+                """, Long.class, searchParameters);
+        List<AdminUserSummary> users = jdbc.query("""
                 SELECT user_account.id, user_account.account_number, user_account.display_name,
                        user_account.status, user_account.is_admin, user_account.is_team_admin,
                        user_account.last_login_at,
                        COALESCE(conversations.conversation_count, 0) AS conversation_count,
-                       COALESCE(usage.total_tokens, 0) AS total_tokens
+                       COALESCE(usage.total_tokens, 0) AS total_tokens,
+                       COALESCE(api_quota.total_token_quota, ?) AS api_total_quota,
+                       COALESCE(api_usage.used_tokens, 0) AS api_used_tokens,
+                       COALESCE(api_usage.request_count, 0) AS api_request_count,
+                       COALESCE(api_keys.key_count, 0) AS api_key_count
                 FROM app_user user_account
                 LEFT JOIN (
                     SELECT user_id, COUNT(*) AS conversation_count
@@ -79,8 +104,23 @@ public class AdminRepository {
                     SELECT user_id, SUM(input_tokens + output_tokens) AS total_tokens
                     FROM daily_user_usage GROUP BY user_id
                 ) usage ON usage.user_id = user_account.id
+                LEFT JOIN api_user_quota api_quota ON api_quota.user_id = user_account.id
+                LEFT JOIN (
+                    SELECT user_id, SUM(input_tokens + output_tokens) AS used_tokens,
+                           SUM(request_count) AS request_count
+                    FROM daily_api_usage GROUP BY user_id
+                ) api_usage ON api_usage.user_id = user_account.id
+                LEFT JOIN (
+                    SELECT user_id, COUNT(*) AS key_count FROM api_key GROUP BY user_id
+                ) api_keys ON api_keys.user_id = user_account.id
+                WHERE (? = ''
+                   OR LOWER(COALESCE(user_account.account_number, '')) LIKE ?
+                   OR LOWER(COALESCE(user_account.display_name, '')) LIKE ?
+                   OR LOWER(COALESCE(user_account.user_number, '')) LIKE ?
+                   OR LOWER(COALESCE(user_account.email, '')) LIKE ?
+                   OR LOWER(COALESCE(user_account.username, '')) LIKE ?)
                 ORDER BY user_account.updated_at DESC
-                LIMIT 100
+                LIMIT ? OFFSET ?
                 """, (rs, rowNum) -> new AdminUserSummary(
                 rs.getLong("id"),
                 rs.getString("account_number"),
@@ -90,8 +130,13 @@ public class AdminRepository {
                 rs.getBoolean("is_team_admin"),
                 rs.getObject("last_login_at", OffsetDateTime.class),
                 rs.getLong("conversation_count"),
-                rs.getLong("total_tokens")
-        ));
+                rs.getLong("total_tokens"),
+                rs.getLong("api_total_quota"),
+                rs.getLong("api_used_tokens"),
+                rs.getLong("api_request_count"),
+                rs.getInt("api_key_count")
+        ), DEFAULT_API_TOKEN_QUOTA, normalizedQuery, pattern, pattern, pattern, pattern, pattern, normalizedSize, offset);
+        return new AdminUserPage(users, total, normalizedPage, normalizedSize);
     }
 
     /** Grants or revokes local administration rights without modifying OAuth2-owned identity data. */

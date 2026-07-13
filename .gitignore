@@ -38,3 +38,4 @@ deploy/certs/*.key
 deploy/runtime.env
 deploy/backups/
 deploy/bundles/
+lm-platform-offline-*.zip

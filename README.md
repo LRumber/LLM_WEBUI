@@ -21,7 +21,7 @@
 - 创建、编辑和删除个人或团队知识库
 - PDF、DOC、DOCX、XLS、XLSX、PPT、PPTX、TXT、Markdown 文档解析
 - 扫描版 PDF 会渲染页面并用本地 OCR 识别
-- 旧 Office 格式通过容器内 LibreOffice 离线转换后解析
+- 旧 Office 格式由后端 Apache POI 离线解析，不依赖 LibreOffice
 - 图片 OCR，依赖 Tesseract 的 `chi_sim` 和 `eng` 语言包
 - 文档切片、Embedding、关键词与向量混合检索
 - 可选 Reranker 重排
@@ -60,7 +60,7 @@
 | 数据库 | PostgreSQL；Compose 当前使用 pgvector PostgreSQL 镜像 |
 | 文件存储 | MinIO |
 | 会话 | Spring Session、Redis |
-| 文档解析 | pypdf、PyMuPDF、python-docx、openpyxl、python-pptx、Pillow、Tesseract、LibreOffice |
+| 文档解析 | Apache POI、pypdf、PyMuPDF、python-docx、openpyxl、python-pptx、Pillow、Tesseract |
 | 模型协议 | OpenAI 兼容 Chat、Embeddings、Audio Transcriptions，以及 Jina/OpenAI 风格 Rerank |
 
 ## 仓库结构
@@ -83,7 +83,7 @@ LM_web/
 - Python 3.11+
 - Docker 与 Docker Compose，用于 PostgreSQL、Redis 和 MinIO
 - Tesseract OCR 5.x，仅在需要图片 OCR 时必需
-- LibreOffice，仅在本机直接解析 `.doc/.xls/.ppt` 时必需；Docker 镜像内已包含
+- 旧 Office `.doc/.xls/.ppt` 由后端 Apache POI 解析，不需要安装 LibreOffice
 - ffmpeg，仅在本机直接使用浏览器录音转写时建议安装；Docker AI 镜像内已包含
 - 至少一个可从部署网络访问的 OpenAI 兼容对话模型 API
 - 使用知识库向量检索时，还需要 Embedding API；Reranker 可选；语音输入需要 OpenAI 兼容语音识别 API
@@ -182,10 +182,10 @@ cd ..\ai-service
 - Vue 构建与 Nginx HTTP/HTTPS 网关
 - Spring Boot 后端
 - FastAPI、Tesseract、`chi_sim`、`eng` 和中文字体
-- LibreOffice、PyMuPDF 和 ffmpeg，用于旧 Office 文件转换、扫描版 PDF OCR 与浏览器录音格式转换
+- Apache POI、PyMuPDF、Tesseract 和 ffmpeg，用于旧 Office 文本提取、扫描版 PDF OCR 与浏览器录音格式转换
 - PostgreSQL、MinIO 和用于 Spring Session 的 Redis
 - 健康检查、启动依赖、资源限制和持久卷
-- 默认域名 `ai.sitp.ac.cn`；域名和端口由部署配置管理
+- 默认入口 `https://datc.sitp.ac.cn:8505`；域名和端口由部署配置管理
 - PostgreSQL、MinIO、模型配置和密钥备份恢复
 - 联网构建及 x86_64 离线镜像导出导入
 

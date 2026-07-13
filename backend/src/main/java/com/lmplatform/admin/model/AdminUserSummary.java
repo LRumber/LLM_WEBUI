@@ -12,6 +12,10 @@ public record AdminUserSummary(
         boolean teamAdministrator,
         OffsetDateTime lastLoginAt,
         long conversationCount,
-        long totalTokens
+        long totalTokens,
+        long apiTotalQuota,
+        long apiUsedTokens,
+        long apiRequestCount,
+        int apiKeyCount
 ) {
 }

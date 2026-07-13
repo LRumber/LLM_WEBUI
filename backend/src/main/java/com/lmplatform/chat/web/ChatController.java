@@ -5,6 +5,7 @@ import com.lmplatform.chat.model.ChatStreamRequest;
 import com.lmplatform.chat.model.BranchConversationRequest;
 import com.lmplatform.chat.model.ConversationMessage;
 import com.lmplatform.chat.model.ConversationSummary;
+import com.lmplatform.chat.model.EditAndRegenerateMessageRequest;
 import com.lmplatform.chat.model.EditMessageRequest;
 import com.lmplatform.chat.model.PromptTemplate;
 import com.lmplatform.chat.model.PromptTemplateRequest;
@@ -73,9 +74,12 @@ public class ChatController {
 
     /** Restores ordered messages for one owned conversation. */
     @GetMapping("/conversations/{conversationId}/messages")
-    public List<ConversationMessage> messages(@PathVariable UUID conversationId) {
+    public ResponseEntity<List<ConversationMessage>> messages(@PathVariable UUID conversationId) {
         long userId = repository.ensureDevelopmentUser();
-        return repository.listMessages(conversationId, userId);
+        if (!repository.belongsToUser(conversationId, userId)) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(repository.listMessages(conversationId, userId));
     }
 
     /** Renames an owned conversation and protects the manual title from async replacement. */
@@ -108,6 +112,45 @@ public class ChatController {
     ) {
         long userId = repository.ensureDevelopmentUser();
         return repository.editUserMessage(conversationId, messageId, userId, request.content())
+                ? ResponseEntity.noContent().build()
+                : ResponseEntity.notFound().build();
+    }
+
+    /** Edits one user message and streams a new assistant answer from the edited context. */
+    @PostMapping(
+            value = "/conversations/{conversationId}/messages/{messageId}/edit-and-regenerate",
+            produces = MediaType.TEXT_EVENT_STREAM_VALUE
+    )
+    public ResponseEntity<StreamingResponseBody> editAndRegenerate(
+            @PathVariable UUID conversationId,
+            @PathVariable UUID messageId,
+            @Valid @RequestBody EditAndRegenerateMessageRequest request
+    ) {
+        long userId = repository.ensureDevelopmentUser();
+        StreamingResponseBody body = output ->
+                chatService.editAndRegenerate(
+                        userId, conversationId, messageId,
+                        request.content(), request.model(), request.thinkingEnabled(), output
+                );
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .header("Cache-Control", "no-cache")
+                .header("X-Accel-Buffering", "no")
+                .body(body);
+    }
+
+    /** Switches the visible branch of an edited user turn without deleting any version. */
+    @PostMapping("/conversations/{conversationId}/messages/{messageId}/versions/{versionIndex}/activate")
+    public ResponseEntity<Void> activateMessageVersion(
+            @PathVariable UUID conversationId,
+            @PathVariable UUID messageId,
+            @PathVariable int versionIndex
+    ) {
+        if (versionIndex < 1) {
+            return ResponseEntity.badRequest().build();
+        }
+        long userId = repository.ensureDevelopmentUser();
+        return repository.activateMessageVersion(conversationId, messageId, userId, versionIndex)
                 ? ResponseEntity.noContent().build()
                 : ResponseEntity.notFound().build();
     }

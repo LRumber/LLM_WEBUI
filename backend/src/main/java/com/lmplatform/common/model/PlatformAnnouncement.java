@@ -1,10 +1,16 @@
 package com.lmplatform.common.model;
 
-/** Editable platform announcement shown once per published revision in the user workspace. */
+import java.time.Instant;
+
+/** Historical platform announcement record managed by administrators. */
 public record PlatformAnnouncement(
         String id,
+        String version,
         String title,
         String body,
-        boolean published
+        boolean published,
+        Instant createdAt,
+        Instant updatedAt,
+        Instant publishedAt
 ) {
 }

@@ -23,7 +23,8 @@ public class UserWebConfig implements WebMvcConfigurer {
                 "/api/speech/**",
                 "/api/prompt-templates/**",
                 "/api/knowledge-bases/**",
-                "/api/teams/**"
+                "/api/teams/**",
+                "/api/developer/**"
         );
     }
 }

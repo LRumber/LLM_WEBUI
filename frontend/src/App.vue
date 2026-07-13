@@ -6,6 +6,7 @@ import {
 } from 'element-plus'
 import { marked } from 'marked'
 import AdminDashboard from './AdminDashboard.vue'
+import ApiPlatformPage from './ApiPlatformPage.vue'
 import KnowledgeBasePage from './KnowledgeBasePage.vue'
 import TeamPage from './TeamPage.vue'
 import { groupConversations, type ConversationSummary } from './conversationHistory'
@@ -16,6 +17,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Copy,
   Database,
@@ -31,11 +33,13 @@ import {
   PanelLeftClose,
   Paperclip,
   Pencil,
+  Quote,
   Search,
   Send,
   Settings,
   ShieldCheck,
   Square,
+  Terminal,
   RotateCcw,
   Trash2,
   Users,
@@ -52,6 +56,8 @@ interface ChatMessage {
   content: string
   error?: boolean
   editedAt?: string | null
+  versionIndex?: number | null
+  versionCount?: number | null
   attachments?: UploadedFile[]
   reasoningContent?: string
   reasoningDurationMs?: number | null
@@ -94,15 +100,17 @@ interface ModelInfo {
   key: string
   display_name: string
   capabilities: string[]
+  context_window?: number | null
 }
 
 /** Normalized event emitted by Spring Boot while forwarding an AI response. */
 interface StreamEvent {
-  type: 'metadata' | 'citations' | 'reasoning_delta' | 'reasoning_done' | 'delta' | 'usage' | 'done' | 'error'
+  type: 'metadata' | 'edit_metadata' | 'citations' | 'reasoning_delta' | 'reasoning_done' | 'delta' | 'usage' | 'done' | 'error'
   content?: string
   message?: string
   conversation_id?: string
   message_id?: string
+  version_index?: number
   prompt_tokens?: number
   completion_tokens?: number
   total_tokens?: number
@@ -119,6 +127,8 @@ interface PersistedMessage {
   inputTokens: number
   outputTokens: number
   editedAt?: string | null
+  versionIndex?: number | null
+  versionCount?: number | null
   attachments?: UploadedFile[]
   reasoningContent?: string | null
   reasoningDurationMs?: number | null
@@ -136,9 +146,13 @@ interface PromptTemplate {
 
 interface PlatformAnnouncement {
   id: string
+  version: string
   title: string
   body: string
   published: boolean
+  createdAt: string
+  updatedAt: string
+  publishedAt: string | null
 }
 
 interface UploadedFile {
@@ -162,7 +176,7 @@ const attachmentTagType = (status: UploadedFile['status']) => {
 
 /** Formats persisted reasoning latency as a compact human-readable duration. */
 const formatReasoningDuration = (durationMs?: number | null) => {
-  if (!durationMs) return '正在思考…'
+  if (!durationMs) return '正在思考...'
   return `已思考 ${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)} 秒`
 }
 
@@ -181,7 +195,7 @@ const downloadAttachment = async (file: UploadedFile) => {
   URL.revokeObjectURL(url)
 }
 
-/** Downloads a cited private source through the same owned-file backend boundary. */
+
 const downloadCitation = async (citation: MessageCitation) => {
   const response = await fetch(`/api/files/${citation.fileId}/download`)
   if (!response.ok) return window.alert('引用文件下载失败')
@@ -195,8 +209,9 @@ const downloadCitation = async (citation: MessageCitation) => {
 
 // Page and conversation state stays local; durable data always comes from Spring Boot.
 const isKnowledge = computed(() => window.location.pathname.startsWith('/app/knowledge'))
-const isTeam = computed(() => window.location.pathname.startsWith('/app/teams'))
-const isWorkspace = computed(() => window.location.pathname.startsWith('/app') && !isKnowledge.value && !isTeam.value)
+const isTeam = computed(() => window.location.pathname.startsWith('/app/team'))
+const isApiPlatform = computed(() => window.location.pathname.startsWith('/app/api-platform'))
+const isWorkspace = computed(() => window.location.pathname.startsWith('/app') && !isKnowledge.value && !isTeam.value && !isApiPlatform.value)
 const isUserApp = computed(() => window.location.pathname.startsWith('/app'))
 const isAdmin = computed(() => window.location.pathname.startsWith('/admin'))
 const userSessionChecked = ref(!isUserApp.value)
@@ -217,6 +232,11 @@ const copiedMessageIndex = ref<number | null>(null)
 const serviceOnline = ref(false)
 const editingConversationId = ref<string | null>(null)
 const editingTitle = ref('')
+const editingMessageKey = ref<string | null>(null)
+const editingMessageContent = ref('')
+const branchingMessageIds = ref<Set<string>>(new Set())
+const branchedMessageIds = ref<Set<string>>(new Set())
+const switchingMessageVersionIds = ref<Set<string>>(new Set())
 const historySearch = ref('')
 const historySearchOpen = ref(false)
 const historySearchInput = ref<HTMLInputElement | null>(null)
@@ -228,6 +248,8 @@ const templateManagerOpen = ref(false)
 const editingTemplateId = ref<string | null>(null)
 const templateForm = ref({ name: '', description: '', systemPrompt: '' })
 const activeAnnouncement = ref<PlatformAnnouncement | null>(null)
+const announcementHistory = ref<PlatformAnnouncement[]>([])
+const announcementHistoryOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const attachments = ref<UploadedFile[]>([])
 const uploadingFile = ref(false)
@@ -236,6 +258,9 @@ const transcribingVoice = ref(false)
 const voiceDurationSeconds = ref(0)
 const thinkingEnabled = ref(false)
 const followLatest = ref(true)
+const expandedUserMessages = ref<Set<string>>(new Set())
+const selectionPopover = ref<{ text: string; x: number; y: number } | null>(null)
+const quotedSelection = ref<{ text: string } | null>(null)
 let abortController: AbortController | null = null
 let voiceStream: MediaStream | null = null
 let voiceAudioContext: AudioContext | null = null
@@ -246,6 +271,8 @@ let voiceSampleRate = 16000
 let voiceShouldTranscribe = false
 let voiceTimer: number | null = null
 const ANNOUNCEMENT_SEEN_PREFIX = 'lm-platform-announcement-seen:'
+const USER_MESSAGE_COLLAPSE_LINES = 10
+const USER_MESSAGE_COLLAPSE_CHARS = 700
 
 // Configure GitHub-flavored Markdown once; every rendered result is sanitized below.
 marked.setOptions({ gfm: true, breaks: true })
@@ -267,6 +294,9 @@ const voiceDurationLabel = computed(() => {
 const selectedModelCapabilities = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.capabilities ?? []
 })
+const selectedModelContextWindow = computed(() => {
+  return models.value.find((model) => model.key === selectedModel.value)?.context_window ?? null
+})
 const selectedTemplateName = computed(() => {
   const activeConversation = conversations.value.find((item) => item.id === conversationId.value)
   if (conversationId.value) return activeConversation?.promptTemplateName ?? '默认提示词'
@@ -282,6 +312,30 @@ const selectedKnowledgeBaseNames = computed(() => {
     .map((item) => item.name)
     .join('、')
 })
+
+const estimateTextTokens = (text: string) => {
+  const cjk = (text.match(/[\u3400-\u9fff]/g) ?? []).length
+  const nonCjk = Math.max(0, text.length - cjk)
+  return Math.ceil(cjk * 1.15 + nonCjk / 4)
+}
+
+const estimateConversationTokens = (nextContent: string) => {
+  const history = messages.value
+    .filter((message) => message.content)
+    .slice(-40)
+    .reduce((total, message) => total + estimateTextTokens(message.content) + 4, 0)
+  return history + estimateTextTokens(nextContent) + 16
+}
+
+const ensureWithinModelContext = (content: string) => {
+  const contextWindow = selectedModelContextWindow.value
+  if (!contextWindow) return true
+  const usablePromptTokens = Math.max(1, Math.floor(contextWindow * 0.8) - 512)
+  const estimatedTokens = estimateConversationTokens(content)
+  if (estimatedTokens <= usablePromptTokens) return true
+  window.alert(`当前内容预计约 ${estimatedTokens} tokens，已超过模型可用上下文约 ${usablePromptTokens} tokens。请缩短输入、开启新对话，或切换更大上下文模型。`)
+  return false
+}
 
 const conversationGroups = computed(() => {
   return groupConversations(conversations.value, historySearch.value)
@@ -331,8 +385,10 @@ const login = () => {
   window.location.href = '/api/auth/login'
 }
 
-const devLogin = async () => {
-  const response = await fetch('/api/auth/dev-login', { method: 'POST' })
+const SSO_LOGOUT_URL = 'http://sso.sitp.ac.cn/uias/logout'
+
+const devLogin = async (user = 'DEV001') => {
+  const response = await fetch(`/api/auth/dev-login?user=${encodeURIComponent(user)}`, { method: 'POST' })
   if (!response.ok) {
     window.alert('本机调试登录未启用，请确认后端 DEV_LOGIN_ENABLED=true')
     return
@@ -349,14 +405,37 @@ const forwardOAuthCallback = () => {
 }
 
 const logout = async () => {
-  await fetch('/api/auth/logout', { method: 'POST' })
-  currentUser.value = null
-  window.location.href = '/'
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' })
+  } finally {
+    currentUser.value = null
+    window.location.replace(SSO_LOGOUT_URL)
+  }
 }
 
 /** Converts model Markdown to sanitized HTML safe for v-html rendering. */
 const renderMarkdown = (content: string) => {
   return DOMPurify.sanitize(marked.parse(content) as string)
+}
+
+const messageDisplayKey = (message: ChatMessage, index: number) => message.id ?? `${message.role}-${index}`
+
+const shouldCollapseUserMessage = (message: ChatMessage) => {
+  if (message.role !== 'user') return false
+  const explicitLines = message.content.split(/\r\n|\r|\n/).length
+  return explicitLines > USER_MESSAGE_COLLAPSE_LINES || message.content.length > USER_MESSAGE_COLLAPSE_CHARS
+}
+
+const isUserMessageExpanded = (message: ChatMessage, index: number) => {
+  return expandedUserMessages.value.has(messageDisplayKey(message, index))
+}
+
+const toggleUserMessageExpanded = (message: ChatMessage, index: number) => {
+  const next = new Set(expandedUserMessages.value)
+  const key = messageDisplayKey(message, index)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedUserMessages.value = next
 }
 
 /** Copies one assistant answer and briefly changes the action icon to confirmation. */
@@ -371,6 +450,15 @@ const copyMessage = async (content: string, index: number) => {
 /** Grows the composer until its maximum height, then lets the textarea scroll. */
 const resizeComposer = () => {
   const textarea = promptInput.value
+  if (!textarea) return
+  textarea.style.height = '0px'
+  const nextHeight = Math.min(textarea.scrollHeight, 180)
+  textarea.style.height = `${nextHeight}px`
+  textarea.style.overflowY = textarea.scrollHeight > 180 ? 'auto' : 'hidden'
+}
+
+const resizeMessageEditor = () => {
+  const textarea = document.querySelector<HTMLTextAreaElement>('.user-message-editor textarea')
   if (!textarea) return
   textarea.style.height = '0px'
   const nextHeight = Math.min(textarea.scrollHeight, 180)
@@ -449,15 +537,18 @@ const loadKnowledgeBases = async () => {
 /** Shows the latest published announcement once per browser and revision. */
 const loadAnnouncement = async () => {
   try {
-    const response = await fetch('/api/announcement/current')
-    if (response.status === 204) {
+    const response = await fetch('/api/announcement/history')
+    if (!response.ok) return
+    const history: PlatformAnnouncement[] = await response.json()
+    announcementHistory.value = history
+    const latest = history[0]
+    if (!latest) {
       activeAnnouncement.value = null
       return
     }
-    if (!response.ok) return
-    const announcement: PlatformAnnouncement = await response.json()
-    const seenKey = `${ANNOUNCEMENT_SEEN_PREFIX}${announcement.id}`
-    activeAnnouncement.value = window.localStorage.getItem(seenKey) ? null : announcement
+    const seenKey = `${ANNOUNCEMENT_SEEN_PREFIX}${latest.id}`
+    activeAnnouncement.value = window.localStorage.getItem(seenKey) ? null : latest
+    announcementHistoryOpen.value = false
   } catch {
     activeAnnouncement.value = null
   }
@@ -468,6 +559,22 @@ const dismissAnnouncement = () => {
     window.localStorage.setItem(`${ANNOUNCEMENT_SEEN_PREFIX}${activeAnnouncement.value.id}`, '1')
   }
   activeAnnouncement.value = null
+  announcementHistoryOpen.value = false
+}
+
+const selectAnnouncement = (announcement: PlatformAnnouncement) => {
+  activeAnnouncement.value = announcement
+  announcementHistoryOpen.value = false
+}
+
+const announcementDate = (announcement: PlatformAnnouncement) => {
+  const value = announcement.publishedAt || announcement.updatedAt || announcement.createdAt
+  if (!value) return ''
+  return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value))
+}
+
+const announcementVersion = (announcement: PlatformAnnouncement) => {
+  return announcement.version || 'V1'
 }
 
 /** Polls durable processing state so extracted content is ready before a message can be sent. */
@@ -521,7 +628,7 @@ const savePromptTemplate = async () => {
 
 /** Disables an owned personal template after confirmation, preserving historical references. */
 const deletePromptTemplate = async (template: PromptTemplate) => {
-  if (!window.confirm(`确定删除个人模板“${template.name}”吗？`)) return
+  if (!window.confirm(`确定删除“${template.name}”吗？`)) return
   const response = await fetch(`/api/prompt-templates/${template.id}`, { method: 'DELETE' })
   if (response.ok) {
     if (selectedTemplateId.value === template.id) selectedTemplateId.value = ''
@@ -715,10 +822,17 @@ const scheduleTitleRefresh = () => {
 
 /** Restores an existing conversation and its last reported token usage. */
 const openConversation = async (conversation: ConversationSummary, forceBottom = true) => {
-  if (isGenerating.value) return
+  if (isGenerating.value) {
+    abortController?.abort()
+    abortController = null
+    isGenerating.value = false
+  }
   const previousScrollTop = conversationArea.value?.scrollTop ?? 0
   const response = await fetch(`/api/conversations/${conversation.id}/messages`)
-  if (!response.ok) return
+  if (!response.ok) {
+    window.alert(`加载历史对话失败（${response.status}），请刷新后重试。`)
+    return
+  }
   const persisted: PersistedMessage[] = await response.json()
   conversationId.value = conversation.id
   selectedModel.value = conversation.model
@@ -732,6 +846,8 @@ const openConversation = async (conversation: ConversationSummary, forceBottom =
       content: message.content,
       error: message.status === 'failed',
       editedAt: message.editedAt,
+      versionIndex: message.versionIndex,
+      versionCount: message.versionCount,
       attachments: message.attachments ?? [],
       reasoningContent: message.reasoningContent ?? '',
       reasoningDurationMs: message.reasoningDurationMs,
@@ -784,31 +900,168 @@ const saveRename = async () => {
   if (response.ok) await loadConversations()
 }
 
-/** Replaces an owned user message; the backend retains later messages as superseded audit history. */
-const editMessage = async (message: ChatMessage) => {
+/** Replaces an owned user message inline; later messages remain superseded on the backend. */
+const editMessage = (message: ChatMessage, index: number) => {
   if (!conversationId.value || !message.id || message.role !== 'user') return
-  const content = window.prompt('编辑消息', message.content)?.trim()
-  if (!content || content === message.content) return
-  const response = await fetch(`/api/conversations/${conversationId.value}/messages/${message.id}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }),
-  })
-  if (!response.ok) return
-  const current = conversations.value.find((item) => item.id === conversationId.value)
-  if (current) await openConversation(current)
-  await loadConversations()
+  editingMessageKey.value = messageDisplayKey(message, index)
+  editingMessageContent.value = message.content
+  nextTick(() => resizeMessageEditor())
 }
 
-/** Forks active history through one message and opens the independently persisted branch. */
-const branchConversation = async (message: ChatMessage) => {
-  if (!conversationId.value || !message.id) return
-  const response = await fetch(`/api/conversations/${conversationId.value}/branches`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId: message.id }),
+const cancelMessageEdit = () => {
+  editingMessageKey.value = null
+  editingMessageContent.value = ''
+}
+
+const branchConversation = async (message: ChatMessage, options: { silent?: boolean } = {}) => {
+  if (!conversationId.value || !message.id || branchingMessageIds.value.has(message.id)) return null
+  if (!options.silent && message.role !== 'assistant') {
+    window.alert('只能从模型回复处创建分支。')
+    return null
+  }
+  if (!options.silent && branchedMessageIds.value.has(message.id)) {
+    window.alert('这个位置已经创建过分支了，请在左侧历史对话中查看。')
+    return null
+  }
+  if (!options.silent && !window.confirm('将从这里创建一个新的对话分支，并切换到分支继续查看。确定创建吗？')) {
+    return null
+  }
+  const nextBranching = new Set(branchingMessageIds.value)
+  nextBranching.add(message.id)
+  branchingMessageIds.value = nextBranching
+  try {
+    const response = await fetch(`/api/conversations/${conversationId.value}/branches`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messageId: message.id }),
+    })
+    if (!response.ok) {
+      if (!options.silent) window.alert('创建分支失败，请稍后重试。')
+      return null
+    }
+    const result: { conversationId: string } = await response.json()
+    const created = new Set(branchedMessageIds.value)
+    created.add(message.id)
+    branchedMessageIds.value = created
+    if (!options.silent) await loadConversations()
+    if (!options.silent) {
+      const branch = conversations.value.find((item) => item.id === result.conversationId)
+      if (branch) await openConversation(branch)
+    }
+    return result.conversationId
+  } finally {
+    const next = new Set(branchingMessageIds.value)
+    next.delete(message.id)
+    branchingMessageIds.value = next
+  }
+}
+
+const sendEditedMessage = async (message: ChatMessage, index: number) => {
+  if (!conversationId.value || !message.id || message.role !== 'user') return
+  const content = editingMessageContent.value.trim()
+  if (!content) return
+  if (content === message.content) return
+  if (!ensureWithinModelContext(content) || isGenerating.value) return
+
+  const currentConversationId = conversationId.value
+  cancelMessageEdit()
+  messages.value.splice(index, messages.value.length - index, {
+    ...message, content, editedAt: new Date().toISOString(),
+  }, {
+    role: 'assistant', content: '', reasoningContent: '', reasoningExpanded: false, citations: [],
   })
-  if (!response.ok) return
-  const result: { conversationId: string } = await response.json()
-  await loadConversations()
-  const branch = conversations.value.find((item) => item.id === result.conversationId)
-  if (branch) await openConversation(branch)
+  const assistantIndex = index + 1
+  expandedUserMessages.value.delete(messageDisplayKey(message, index))
+  usage.value = { prompt: 0, completion: 0, total: 0 }
+  isGenerating.value = true
+  abortController = new AbortController()
+  followLatest.value = true
+  await scrollToBottom(true)
+
+  try {
+    const response = await fetch(`/api/conversations/${currentConversationId}/messages/${message.id}/edit-and-regenerate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, model: selectedModel.value, thinkingEnabled: thinkingEnabled.value }),
+      signal: abortController.signal,
+    })
+    if (!response.ok) throw new Error(`编辑发送失败（${response.status}）`)
+    await consumeEventStream(response, assistantIndex)
+  } catch (error) {
+    const assistant = messages.value[assistantIndex]
+    if ((error as Error).name === 'AbortError') {
+      if (!assistant.content) assistant.content = '已停止生成。'
+    } else {
+      assistant.error = true
+      assistant.content = (error as Error).message || '无法连接后端服务。'
+    }
+  } finally {
+    isGenerating.value = false
+    abortController = null
+    await loadConversations()
+    const current = conversations.value.find((item) => item.id === conversationId.value)
+    if (current) await openConversation(current, followLatest.value)
+    await scrollToBottom()
+  }
+}
+
+const activateMessageVersion = async (message: ChatMessage, direction: -1 | 1) => {
+  if (!conversationId.value || !message.id || message.role !== 'user') return
+  const current = message.versionIndex ?? 1
+  const total = message.versionCount ?? 1
+  const target = current + direction
+  if (target < 1 || target > total) return
+  const next = new Set(switchingMessageVersionIds.value)
+  next.add(message.id)
+  switchingMessageVersionIds.value = next
+  try {
+    const response = await fetch(
+      `/api/conversations/${conversationId.value}/messages/${message.id}/versions/${target}/activate`,
+      { method: 'POST' },
+    )
+    if (!response.ok) {
+      window.alert('切换历史版本失败，请稍后重试。')
+      return
+    }
+    await loadConversations()
+    const currentConversation = conversations.value.find((item) => item.id === conversationId.value)
+    if (currentConversation) await openConversation(currentConversation, false)
+  } finally {
+    const after = new Set(switchingMessageVersionIds.value)
+    after.delete(message.id)
+    switchingMessageVersionIds.value = after
+  }
+}
+
+const handleConversationSelection = () => {
+  const selection = window.getSelection()
+  const text = selection?.toString().trim()
+  if (!selection || !text) {
+    selectionPopover.value = null
+    return
+  }
+  const range = selection.rangeCount ? selection.getRangeAt(0) : null
+  const area = conversationArea.value
+  if (!range || !area || !area.contains(range.commonAncestorContainer)) {
+    selectionPopover.value = null
+    return
+  }
+  const rect = range.getBoundingClientRect()
+  selectionPopover.value = {
+    text: text.length > 2000 ? `${text.slice(0, 2000)}...` : text,
+    x: Math.min(window.innerWidth - 220, Math.max(16, rect.left)),
+    y: Math.max(16, rect.top - 50),
+  }
+}
+
+const quoteSelectedText = () => {
+  if (!selectionPopover.value) return
+  quotedSelection.value = { text: selectionPopover.value.text }
+  selectionPopover.value = null
+  window.getSelection()?.removeAllRanges()
+  nextTick(() => promptInput.value?.focus())
+}
+
+const clearQuotedSelection = () => {
+  quotedSelection.value = null
 }
 
 /** Streams a replacement for one persisted assistant answer without adding a duplicate user turn. */
@@ -876,7 +1129,13 @@ const applyStreamEvent = (event: StreamEvent, assistantIndex: number) => {
   if (event.type === 'metadata' && event.conversation_id) {
     conversationId.value = event.conversation_id
   }
-  if (event.type === 'citations') {
+  if (event.type === 'edit_metadata' && event.message_id) {
+    const editedUser = messages.value[assistantIndex - 1]
+    if (editedUser?.role === 'user') {
+      editedUser.id = event.message_id
+      editedUser.versionIndex = event.version_index ?? editedUser.versionIndex
+    }
+  } else if (event.type === 'citations') {
     assistant.citations = event.citations ?? []
   } else if (event.type === 'reasoning_delta' && event.content) {
     assistant.reasoningContent = (assistant.reasoningContent ?? '') + event.content
@@ -924,8 +1183,12 @@ const consumeEventStream = async (response: Response, assistantIndex: number) =>
 const sendPrompt = async (preset?: string) => {
   const content = (preset ?? prompt.value).trim()
   if (!content || isGenerating.value) return
+  const contentForModel = quotedSelection.value
+    ? `请基于以下引用内容回答：\n\n> ${quotedSelection.value.text.replace(/\n/g, '\n> ')}\n\n${content}`
+    : content
+  if (!ensureWithinModelContext(contentForModel)) return
   if (attachments.value.some((file) => file.status !== 'ready')) {
-    window.alert('请等待附件解析完成后再发送。')
+    window.alert('当前输入超过模型上下文限制，请缩短后再发送。')
     return
   }
   const isFirstMessage = conversationId.value === null
@@ -933,13 +1196,14 @@ const sendPrompt = async (preset?: string) => {
   const sentAttachments = attachments.value.map((file) => ({ ...file }))
   const attachmentIds = sentAttachments.map((file) => file.id)
 
-  const userMessage: ChatMessage = { role: 'user', content, attachments: sentAttachments }
+  const userMessage: ChatMessage = { role: 'user', content: contentForModel, attachments: sentAttachments }
   const assistantMessage: ChatMessage = {
     role: 'assistant', content: '', reasoningContent: '', reasoningExpanded: false, citations: [],
   }
   messages.value.push(userMessage, assistantMessage)
   const assistantIndex = messages.value.length - 1
   prompt.value = ''
+  quotedSelection.value = null
   attachments.value = []
   await nextTick()
   resizeComposer()
@@ -956,7 +1220,7 @@ const sendPrompt = async (preset?: string) => {
       body: JSON.stringify({
         conversationId: conversationId.value,
         model: selectedModel.value,
-        content,
+        content: contentForModel,
         templateId: isFirstMessage && selectedTemplateId.value ? selectedTemplateId.value : null,
         attachmentIds,
         knowledgeBaseIds: isFirstMessage ? selectedKnowledgeBaseIds.value : [],
@@ -1042,20 +1306,26 @@ onMounted(async () => {
   <AdminDashboard v-if="isAdmin" />
   <KnowledgeBasePage v-else-if="isKnowledge && currentUser" />
   <TeamPage v-else-if="isTeam && currentUser" />
+  <ApiPlatformPage v-else-if="isApiPlatform && currentUser" />
   <!-- Authentication entry screen. -->
   <main v-else-if="!isUserApp || (userSessionChecked && !currentUser)" class="login-page">
     <section class="login-panel" aria-labelledby="login-title">
       <img class="login-logo" src="/brand/sitp-logo.jpg" alt="SITP" />
-      <p class="product-name">离线智能工作台</p>
+      <p class="product-name">SITP智能AI工作台</p>
       <h1 id="login-title">统一身份认证</h1>
       <p class="login-copy">使用组织账号进入对话、知识库与智能应用平台。</p>
       <button class="primary-button login-button" type="button" @click="login">
         <ShieldCheck :size="18" />
         统一登录
       </button>
-      <button v-if="authOptions.devLoginEnabled" class="secondary-button login-button" type="button" @click="devLogin">
-        本机调试登录
-      </button>
+      <div v-if="authOptions.devLoginEnabled" class="dev-login-actions">
+        <button class="secondary-button login-button" type="button" @click="devLogin('DEV001')">
+          DEV001 团队管理员
+        </button>
+        <button class="secondary-button login-button" type="button" @click="devLogin('DEV002')">
+          DEV002 普通成员
+        </button>
+      </div>
       <p class="login-note">账号与权限由统一身份认证中心管理</p>
     </section>
   </main>
@@ -1081,7 +1351,8 @@ onMounted(async () => {
       <nav class="main-nav" aria-label="主导航">
         <a class="nav-item active" href="/app"><Bot :size="18" />对话</a>
         <a class="nav-item" href="/app/knowledge"><Library :size="18" />知识库</a>
-        <a class="nav-item" href="/app/teams"><Users :size="18" />团队空间</a>
+        <a class="nav-item" href="/app/team"><Users :size="18" />团队空间</a>
+        <a class="nav-item" href="/app/api-platform"><Terminal :size="18" />API 开发平台</a>
         <a class="nav-item" href="#"><Archive :size="18" />智能应用</a>
       </nav>
 
@@ -1093,7 +1364,6 @@ onMounted(async () => {
             class="icon-button"
             type="button"
             title="搜索对话"
-            :aria-expanded="historySearchOpen"
             @click="toggleHistorySearch"
           >
             <Search :size="16" />
@@ -1117,6 +1387,7 @@ onMounted(async () => {
             :key="conversation.id"
             class="history-row"
             :class="{ 'active-history': conversation.id === conversationId }"
+            @click="openConversation(conversation)"
           >
             <input
               v-if="editingConversationId === conversation.id"
@@ -1134,7 +1405,7 @@ onMounted(async () => {
                 class="history-item"
                 type="button"
                 :title="conversation.preview"
-                @click="openConversation(conversation)"
+                @click.stop="openConversation(conversation)"
               >
                 {{ conversation.title || '未命名对话' }}
               </button>
@@ -1220,7 +1491,13 @@ onMounted(async () => {
         </div>
       </header>
 
-      <div ref="conversationArea" class="conversation-area" :class="{ 'has-messages': messages.length }" @scroll="handleConversationScroll">
+      <div
+        ref="conversationArea"
+        class="conversation-area"
+        :class="{ 'has-messages': messages.length }"
+        @scroll="handleConversationScroll"
+        @mouseup="handleConversationSelection"
+      >
         <!-- Empty-state suggestions are real prompts, not decorative cards. -->
         <div v-if="!messages.length" class="empty-state">
           <div class="empty-icon"><Bot :size="24" /></div>
@@ -1235,7 +1512,12 @@ onMounted(async () => {
 
         <div v-else class="message-list">
           <!-- Assistant Markdown is sanitized; user text is rendered as plain text. -->
-          <article v-for="(message, index) in messages" :key="index" class="message" :class="message.role">
+          <article
+            v-for="(message, index) in messages"
+            :key="index"
+            class="message"
+            :class="[message.role, { editing: editingMessageKey === messageDisplayKey(message, index) }]"
+          >
             <div v-if="message.role === 'assistant'" class="message-avatar"><Bot :size="17" /></div>
             <div class="message-column">
               <div class="message-body" :class="{ error: message.error }">
@@ -1256,7 +1538,29 @@ onMounted(async () => {
                   <div v-if="message.reasoningExpanded" class="reasoning-content">{{ message.reasoningContent }}</div>
                 </div>
                 <div v-if="message.content && message.role === 'assistant'" class="markdown-body" v-html="renderMarkdown(message.content)"></div>
-                <p v-else-if="message.content">{{ message.content }}</p>
+                <div v-else-if="message.content && editingMessageKey === messageDisplayKey(message, index)" class="user-message-editor">
+                  <textarea
+                    v-model="editingMessageContent"
+                    rows="1"
+                    @input="resizeMessageEditor"
+                    @keydown.esc.prevent="cancelMessageEdit"
+                  ></textarea>
+                  <div>
+                    <button type="button" @click="cancelMessageEdit">取消</button>
+                    <button class="primary" type="button" :disabled="!editingMessageContent.trim() || isGenerating" @click="sendEditedMessage(message, index)">发送</button>
+                  </div>
+                </div>
+                <div v-else-if="message.content" class="user-message-text">
+                  <p :class="{ collapsed: shouldCollapseUserMessage(message) && !isUserMessageExpanded(message, index) }">{{ message.content }}</p>
+                  <button
+                    v-if="shouldCollapseUserMessage(message)"
+                    class="user-message-expand"
+                    type="button"
+                    @click="toggleUserMessageExpanded(message, index)"
+                  >
+                    {{ isUserMessageExpanded(message, index) ? '收起' : '展开全部' }}
+                  </button>
+                </div>
                 <div v-else class="typing-indicator" aria-label="模型正在生成"><i></i><i></i><i></i></div>
                 <details v-if="message.role === 'assistant' && message.citations?.length" class="message-citations">
                   <summary><Library :size="14" />引用来源（{{ message.citations.length }}）</summary>
@@ -1268,17 +1572,52 @@ onMounted(async () => {
                 </details>
               </div>
               <div v-if="message.content" class="message-actions">
-                <button v-if="message.role === 'assistant'" class="message-action" type="button" title="复制回答" @click="copyMessage(message.content, index)">
+                <button
+                  v-if="message.role === 'assistant' || message.role === 'user'"
+                  class="message-action"
+                  type="button"
+                  :title="message.role === 'user' ? '复制消息' : '复制回答'"
+                  @click="copyMessage(message.content, index)"
+                >
                   <Check v-if="copiedMessageIndex === index" :size="15" />
                   <Copy v-else :size="15" />
                 </button>
                 <button v-if="message.role === 'assistant' && message.id" class="message-action" type="button" title="重新生成" @click="regenerateMessage(message, index)"><RotateCcw :size="15" /></button>
-                <button v-if="message.role === 'user' && message.id" class="message-action" type="button" title="编辑消息" @click="editMessage(message)"><Pencil :size="15" /></button>
-                <button v-if="message.id" class="message-action" type="button" title="从此处分支" @click="branchConversation(message)"><GitBranch :size="15" /></button>
+                <button v-if="message.role === 'user' && message.id" class="message-action" type="button" title="编辑消息" @click="editMessage(message, index)"><Pencil :size="15" /></button>
+                <button
+                  v-if="message.role === 'assistant' && message.id"
+                  class="message-action"
+                  type="button"
+                  title="从此处分支"
+                  :disabled="branchingMessageIds.has(message.id) || branchedMessageIds.has(message.id)"
+                  @click="branchConversation(message)"
+                ><GitBranch :size="15" /></button>
+                <span v-if="message.role === 'user' && message.id && (message.versionCount ?? 0) > 1" class="message-version-switch">
+                  <button
+                    type="button"
+                    title="上一版本"
+                    :disabled="switchingMessageVersionIds.has(message.id) || (message.versionIndex ?? 1) <= 1"
+                    @click="activateMessageVersion(message, -1)"
+                  ><ChevronLeft :size="15" /></button>
+                  <b>{{ message.versionIndex ?? 1 }}/{{ message.versionCount }}</b>
+                  <button
+                    type="button"
+                    title="下一版本"
+                    :disabled="switchingMessageVersionIds.has(message.id) || (message.versionIndex ?? 1) >= (message.versionCount ?? 1)"
+                    @click="activateMessageVersion(message, 1)"
+                  ><ChevronRight :size="15" /></button>
+                </span>
                 <small v-if="message.editedAt">已编辑</small>
               </div>
             </div>
           </article>
+        </div>
+        <div
+          v-if="selectionPopover"
+          class="selection-popover"
+          :style="{ left: `${selectionPopover.x}px`, top: `${selectionPopover.y}px` }"
+        >
+          <button type="button" @click="quoteSelectedText"><Quote :size="14" />引用提问</button>
         </div>
         <button v-if="messages.length && !followLatest" class="jump-to-latest" type="button" @click="jumpToLatest"><ArrowDown :size="15" />回到最新回复</button>
       </div>
@@ -1315,6 +1654,11 @@ onMounted(async () => {
             </div>
           </div>
           <template v-else>
+            <div v-if="quotedSelection" class="composer-quote">
+              <Quote :size="15" />
+              <span>{{ quotedSelection.text }}</span>
+              <button type="button" title="移除引用" @click="clearQuotedSelection"><X :size="14" /></button>
+            </div>
             <textarea
               ref="promptInput"
               v-model="prompt"
@@ -1377,13 +1721,42 @@ onMounted(async () => {
         <section class="announcement-modal" role="dialog" aria-modal="true" aria-labelledby="announcement-title">
           <header>
             <div>
-              <span>平台更新</span>
+              <div class="announcement-release-meta">
+                <strong>{{ announcementVersion(activeAnnouncement) }}</strong>
+                <time>{{ announcementDate(activeAnnouncement) }}</time>
+              </div>
               <h2 id="announcement-title">{{ activeAnnouncement.title }}</h2>
             </div>
-            <button type="button" title="关闭公告" @click="dismissAnnouncement"><X :size="18" /></button>
+            <button type="button" title="鍏抽棴鍏憡" @click="dismissAnnouncement"><X :size="18" /></button>
           </header>
-          <p>{{ activeAnnouncement.body }}</p>
+          <div v-if="!announcementHistoryOpen" class="announcement-content">
+            <b>鏇存柊鍐呭</b>
+            <small v-if="announcementDate(activeAnnouncement)">最新公告 · 发布于 {{ announcementDate(activeAnnouncement) }}</small>
+            <p>{{ activeAnnouncement.body }}</p>
+          </div>
+          <div v-else class="announcement-history">
+            <button
+              v-for="item in announcementHistory"
+              :key="item.id"
+              type="button"
+              :class="{ active: item.id === activeAnnouncement.id }"
+              @click="selectAnnouncement(item)"
+            >
+              <em>{{ announcementVersion(item) }} 路 {{ announcementDate(item) }}</em>
+              <span>{{ announcementDate(item) }}</span>
+              <strong>{{ item.title }}</strong>
+              <p>{{ item.body }}</p>
+            </button>
+          </div>
           <footer>
+            <button
+              v-if="announcementHistory.length > 1"
+              class="secondary"
+              type="button"
+              @click="announcementHistoryOpen = !announcementHistoryOpen"
+            >
+              {{ announcementHistoryOpen ? '返回最新公告' : '查看历史更新' }}
+            </button>
             <button type="button" @click="dismissAnnouncement">我知道了</button>
           </footer>
         </section>

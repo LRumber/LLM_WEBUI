@@ -6,7 +6,7 @@ export interface FileCompatibility {
   reason?: string
 }
 
-const documentExtensions = new Set(['pdf', 'docx', 'xlsx', 'pptx', 'txt', 'md', 'markdown'])
+const documentExtensions = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md', 'markdown'])
 
 /** Matches a browser file to model capabilities and platform extraction tools. */
 export const assessFileCompatibility = (

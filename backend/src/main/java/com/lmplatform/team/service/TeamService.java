@@ -25,7 +25,7 @@ public class TeamService {
 
     public TeamSummary create(long userId, TeamRequest request) {
         if (!repository.isTeamAdministrator(userId)) {
-            throw new TeamAccessException("Only a designated team administrator can create a team");
+            throw new TeamAccessException("当前不是团队管理员，请联系系统管理员进行添加");
         }
         UUID id = repository.create(userId, request.name().strip(), normalize(request.description()));
         return repository.list(userId).stream().filter(team -> team.id().equals(id)).findFirst()

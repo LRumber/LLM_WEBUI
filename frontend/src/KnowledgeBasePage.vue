@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElProgress, ElTag } from 'element-plus'
 import { ArrowLeft, BookOpen, FileText, Library, Pencil, Plus, RefreshCw, Trash2, Upload } from 'lucide-vue-next'
 
@@ -38,7 +38,6 @@ interface KnowledgeSearchResult {
   score: number
 }
 
-/** Personal knowledge-space management stays separate from the chat workspace. */
 const knowledgeBases = ref<KnowledgeBase[]>([])
 const selectedId = ref<string | null>(null)
 const documents = ref<KnowledgeDocument[]>([])
@@ -51,12 +50,35 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const searchQuery = ref('')
 const searchResults = ref<KnowledgeSearchResult[]>([])
 const searching = ref(false)
+const searchPerformed = ref(false)
 let pollTimer: number | null = null
 
 const selected = computed(() => knowledgeBases.value.find((item) => item.id === selectedId.value) ?? null)
+const personalKnowledgeBases = computed(() => knowledgeBases.value.filter((item) => item.spaceType === 'personal'))
+const teamKnowledgeBases = computed(() => knowledgeBases.value.filter((item) => item.spaceType === 'team'))
+const otherKnowledgeBases = computed(() => knowledgeBases.value.filter((item) => item.spaceType !== 'personal' && item.spaceType !== 'team'))
 const processingDocuments = computed(() => documents.value.some(
   (document) => document.fileStatus === 'uploaded' || document.fileStatus === 'processing',
 ))
+
+const canManageKnowledgeBase = (knowledgeBase: KnowledgeBase | null) => {
+  if (!knowledgeBase) return false
+  return knowledgeBase.memberRole === 'owner' || knowledgeBase.memberRole === 'admin'
+}
+
+const canManageDocuments = (knowledgeBase: KnowledgeBase | null) => {
+  if (!knowledgeBase) return false
+  return knowledgeBase.memberRole === 'owner'
+    || knowledgeBase.memberRole === 'admin'
+    || knowledgeBase.memberRole === 'editor'
+}
+
+const spaceLabel = (knowledgeBase: KnowledgeBase | null) => {
+  if (!knowledgeBase) return ''
+  if (knowledgeBase.spaceType === 'team') return '团队知识库'
+  if (knowledgeBase.spaceType === 'project') return '项目知识库'
+  return '个人知识库'
+}
 
 const statusLabel = (document: KnowledgeDocument) => {
   if (document.fileStatus === 'failed') return '解析失败'
@@ -100,6 +122,8 @@ const loadDocuments = async () => {
 
 const selectKnowledgeBase = async (id: string) => {
   selectedId.value = id
+  searchPerformed.value = false
+  searchResults.value = []
   await loadDocuments()
 }
 
@@ -137,7 +161,6 @@ const deleteKnowledgeBase = async (knowledgeBase: KnowledgeBase) => {
   await loadDocuments()
 }
 
-/** Uploads to private object storage first, then attaches only the returned owned asset id. */
 const uploadDocuments = async (event: Event) => {
   const input = event.target as HTMLInputElement
   if (!selectedId.value || !input.files?.length) return
@@ -184,10 +207,10 @@ const removeDocument = async (document: KnowledgeDocument) => {
   await Promise.all([loadDocuments(), loadKnowledgeBases()])
 }
 
-/** Runs the same permission-filtered retrieval endpoint that chat will consume later. */
 const testRetrieval = async () => {
   if (!selectedId.value || !searchQuery.value.trim()) return
   searching.value = true
+  searchPerformed.value = false
   try {
     const response = await fetch(`/api/knowledge-bases/${selectedId.value}/search`, {
       method: 'POST',
@@ -196,12 +219,19 @@ const testRetrieval = async () => {
     })
     if (!response.ok) throw new Error('检索失败，请检查文档状态和 Embedding 配置')
     searchResults.value = await response.json()
+    searchPerformed.value = true
   } catch (error) {
+    searchPerformed.value = false
     window.alert((error as Error).message)
   } finally {
     searching.value = false
   }
 }
+
+watch(searchQuery, () => {
+  searchPerformed.value = false
+  searchResults.value = []
+})
 
 onMounted(async () => {
   loading.value = true
@@ -213,7 +243,6 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-  // Polling is local and bounded; no external service is required in the final offline environment.
   pollTimer = window.setInterval(() => {
     if (processingDocuments.value) loadDocuments()
   }, 3000)
@@ -230,19 +259,41 @@ onBeforeUnmount(() => {
       <a class="knowledge-back" href="/app"><ArrowLeft :size="17" />返回对话</a>
       <div class="knowledge-brand"><Library :size="21" /><strong>知识库</strong></div>
       <button class="knowledge-create" type="button" @click="openEditor()"><Plus :size="16" />新建知识库</button>
+
       <div class="knowledge-space-label">个人知识库</div>
-      <button v-for="knowledgeBase in knowledgeBases" :key="knowledgeBase.id" class="knowledge-space-item" :class="{ active: selectedId === knowledgeBase.id }" type="button" @click="selectKnowledgeBase(knowledgeBase.id)">
+      <button v-for="knowledgeBase in personalKnowledgeBases" :key="knowledgeBase.id" class="knowledge-space-item" :class="{ active: selectedId === knowledgeBase.id }" type="button" @click="selectKnowledgeBase(knowledgeBase.id)">
         <span><BookOpen :size="16" /></span>
         <div><strong>{{ knowledgeBase.name }}</strong><small>{{ knowledgeBase.documentCount }} 个文档</small></div>
       </button>
+
+      <template v-if="teamKnowledgeBases.length">
+        <div class="knowledge-space-label">团队知识库</div>
+        <button v-for="knowledgeBase in teamKnowledgeBases" :key="knowledgeBase.id" class="knowledge-space-item" :class="{ active: selectedId === knowledgeBase.id }" type="button" @click="selectKnowledgeBase(knowledgeBase.id)">
+          <span><BookOpen :size="16" /></span>
+          <div><strong>{{ knowledgeBase.name }}</strong><small>{{ knowledgeBase.documentCount }} 个文档</small></div>
+        </button>
+      </template>
+
+      <template v-if="otherKnowledgeBases.length">
+        <div class="knowledge-space-label">其他知识库</div>
+        <button v-for="knowledgeBase in otherKnowledgeBases" :key="knowledgeBase.id" class="knowledge-space-item" :class="{ active: selectedId === knowledgeBase.id }" type="button" @click="selectKnowledgeBase(knowledgeBase.id)">
+          <span><BookOpen :size="16" /></span>
+          <div><strong>{{ knowledgeBase.name }}</strong><small>{{ knowledgeBase.documentCount }} 个文档</small></div>
+        </button>
+      </template>
+
       <p v-if="!knowledgeBases.length && !loading" class="knowledge-sidebar-empty">还没有知识库</p>
     </aside>
 
     <section class="knowledge-content">
       <template v-if="selected">
         <header class="knowledge-header">
-          <div><p>个人知识库</p><h1>{{ selected.name }}</h1><span>{{ selected.description || '暂未填写说明' }}</span></div>
-          <div class="knowledge-header-actions">
+          <div>
+            <p>{{ spaceLabel(selected) }}</p>
+            <h1>{{ selected.name }}</h1>
+            <span>{{ selected.description || '暂未填写说明' }}</span>
+          </div>
+          <div v-if="canManageKnowledgeBase(selected)" class="knowledge-header-actions">
             <button type="button" @click="openEditor(selected)"><Pencil :size="15" />编辑</button>
             <button class="danger" type="button" @click="deleteKnowledgeBase(selected)"><Trash2 :size="15" />删除</button>
           </div>
@@ -250,24 +301,27 @@ onBeforeUnmount(() => {
 
         <div class="knowledge-toolbar">
           <div><strong>文档</strong><span>{{ documents.length }} 个文件</span></div>
-          <input ref="fileInput" type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.txt,.md" @change="uploadDocuments" />
-          <button type="button" :disabled="uploading" @click="fileInput?.click()"><Upload :size="16" />{{ uploading ? '上传中…' : '上传文档' }}</button>
+          <input ref="fileInput" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.markdown" @change="uploadDocuments" />
+          <button v-if="canManageDocuments(selected)" type="button" :disabled="uploading" @click="fileInput?.click()"><Upload :size="16" />{{ uploading ? '上传中...' : '上传文档' }}</button>
         </div>
 
         <section class="knowledge-search-test">
           <header><div><strong>检索测试</strong><span>查看实际召回的原文和相关度</span></div></header>
           <form @submit.prevent="testRetrieval">
             <input v-model="searchQuery" placeholder="输入一个问题或关键词" />
-            <button type="submit" :disabled="searching || !searchQuery.trim()">{{ searching ? '检索中…' : '开始检索' }}</button>
+            <button type="submit" :disabled="searching || !searchQuery.trim()">{{ searching ? '检索中...' : '开始检索' }}</button>
           </form>
           <div v-if="searchResults.length" class="knowledge-search-results">
             <article v-for="(result, index) in searchResults" :key="result.chunkId">
-              <div><strong>{{ index + 1 }}. {{ result.filename }}</strong><span>相关度 {{ Math.round(result.score * 100) }}%<template v-if="result.pageNumber"> · 第 {{ result.pageNumber }} 页</template></span></div>
+              <div>
+                <strong>{{ index + 1 }}. {{ result.filename }}</strong>
+                <span>相关度 {{ Math.round(result.score * 100) }}%<template v-if="result.pageNumber"> · 第 {{ result.pageNumber }} 页</template></span>
+              </div>
               <p>{{ result.content }}</p>
               <small>关键词 {{ result.keywordScore.toFixed(2) }} · 向量 {{ result.vectorScore.toFixed(2) }}</small>
             </article>
           </div>
-          <p v-else-if="searchQuery && !searching" class="knowledge-search-empty">尚无检索结果</p>
+          <p v-else-if="searchPerformed && !searching" class="knowledge-search-empty">暂无检索结果</p>
         </section>
 
         <div v-if="documents.length" class="knowledge-document-list">
@@ -280,19 +334,21 @@ onBeforeUnmount(() => {
               <p v-if="document.errorMessage">{{ document.errorMessage }}</p>
             </div>
             <ElTag :type="statusType(document)" effect="light" round>{{ statusLabel(document) }}</ElTag>
-            <button v-if="document.fileStatus === 'failed'" type="button" title="重新解析" @click="retryDocument(document)"><RefreshCw :size="15" /></button>
-            <button type="button" title="移除文档" @click="removeDocument(document)"><Trash2 :size="15" /></button>
+            <button v-if="canManageDocuments(selected) && document.fileStatus === 'failed'" type="button" title="重新解析" @click="retryDocument(document)"><RefreshCw :size="15" /></button>
+            <button v-if="canManageDocuments(selected)" type="button" title="移除文档" @click="removeDocument(document)"><Trash2 :size="15" /></button>
           </article>
         </div>
         <div v-else class="knowledge-empty-documents">
-          <FileText :size="30" /><h2>上传第一份文档</h2>
+          <FileText :size="30" />
+          <h2>上传第一份文档</h2>
           <p>支持 PDF、Word、Excel、PPT、TXT 和 Markdown，文件将存入私有对象存储。</p>
-          <button type="button" @click="fileInput?.click()"><Upload :size="16" />选择文件</button>
+          <button v-if="canManageDocuments(selected)" type="button" @click="fileInput?.click()"><Upload :size="16" />选择文件</button>
         </div>
       </template>
 
       <div v-else class="knowledge-empty-page">
-        <Library :size="36" /><h1>创建你的第一个知识库</h1>
+        <Library :size="36" />
+        <h1>创建你的第一个知识库</h1>
         <p>集中管理资料，后续可在对话中检索并引用原文。</p>
         <button type="button" @click="openEditor()"><Plus :size="16" />新建知识库</button>
       </div>
@@ -300,7 +356,13 @@ onBeforeUnmount(() => {
 
     <div v-if="editorOpen" class="knowledge-dialog-backdrop" @click.self="editorOpen = false">
       <form class="knowledge-dialog" @submit.prevent="saveKnowledgeBase">
-        <header><div><h2>{{ editingId ? '编辑知识库' : '新建知识库' }}</h2><p>当前创建个人空间，只有你可以访问。</p></div><button type="button" @click="editorOpen = false">×</button></header>
+        <header>
+          <div>
+            <h2>{{ editingId ? '编辑知识库' : '新建知识库' }}</h2>
+            <p>当前创建个人空间，只有你可以访问。</p>
+          </div>
+          <button type="button" @click="editorOpen = false">×</button>
+        </header>
         <label>名称<input v-model="form.name" maxlength="100" required placeholder="例如：产品资料" /></label>
         <label>说明<textarea v-model="form.description" maxlength="500" rows="4" placeholder="说明知识库包含哪些内容"></textarea></label>
         <footer><button type="button" @click="editorOpen = false">取消</button><button class="primary" type="submit">保存</button></footer>

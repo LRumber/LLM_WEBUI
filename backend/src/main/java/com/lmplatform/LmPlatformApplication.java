@@ -3,6 +3,7 @@ package com.lmplatform;
 import com.lmplatform.admin.config.AdminBootstrapProperties;
 import com.lmplatform.auth.config.OAuth2GatewayProperties;
 import com.lmplatform.chat.config.AiServiceProperties;
+import com.lmplatform.chat.config.LegacyChatImportProperties;
 import com.lmplatform.file.config.ObjectStorageProperties;
 import com.lmplatform.knowledge.config.KnowledgeProperties;
 import org.springframework.boot.SpringApplication;
@@ -15,6 +16,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
         AdminBootstrapProperties.class,
         OAuth2GatewayProperties.class,
         AiServiceProperties.class,
+        LegacyChatImportProperties.class,
         ObjectStorageProperties.class,
         KnowledgeProperties.class
 })

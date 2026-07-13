@@ -129,6 +129,7 @@ def stream_chat(request: ChatRequest) -> StreamingResponse:
     model = registry.get(request.model)
     if model is None or "chat" not in model.capabilities:
         raise HTTPException(status_code=404, detail="Chat model not found")
+    validate_context_window(request, model)
 
     async def event_stream():
         """Convert service exceptions into final SSE error events after headers are sent."""
@@ -153,6 +154,46 @@ def stream_chat(request: ChatRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def validate_context_window(request: ChatRequest, model: ModelEndpoint) -> None:
+    """Reject clearly oversized prompts before they reach the inference server."""
+    if not model.context_window:
+        return
+    estimated = estimate_request_tokens(request)
+    usable_prompt_tokens = max(1, int(model.context_window * 0.8) - 512)
+    if estimated > usable_prompt_tokens:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Prompt is too long for model context window: estimated {estimated} tokens, "
+                f"usable prompt budget {usable_prompt_tokens} tokens"
+            ),
+        )
+
+
+def estimate_request_tokens(request: ChatRequest) -> int:
+    """Conservative token estimate for mixed Chinese/English text and multimodal parts."""
+    total = 0
+    for message in request.messages:
+        total += 4
+        content = message.content
+        if isinstance(content, str):
+            total += estimate_text_tokens(content)
+        else:
+            for part in content:
+                if part.type == "text":
+                    total += estimate_text_tokens(part.text)
+                else:
+                    total += 256
+    return total + 16
+
+
+def estimate_text_tokens(text: str) -> int:
+    """Approximate tokens without binding the offline service to model-specific tokenizers."""
+    cjk = sum(1 for char in text if "\u3400" <= char <= "\u9fff")
+    non_cjk = max(0, len(text) - cjk)
+    return int(cjk * 1.15 + non_cjk / 4 + 0.999)
 
 
 @app.post("/v1/embeddings", response_model=EmbeddingResponse)

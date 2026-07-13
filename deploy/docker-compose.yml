@@ -106,6 +106,10 @@ services:
       AI_SERVICE_TIMEOUT_SECONDS: ${AI_SERVICE_TIMEOUT_SECONDS:-150}
       AI_TITLE_MODEL: ${AI_TITLE_MODEL:-deepseek-chat}
       AI_MAX_CONTEXT_MESSAGES: ${AI_MAX_CONTEXT_MESSAGES:-40}
+      LEGACY_CHAT_IMPORT_ENABLED: ${LEGACY_CHAT_IMPORT_ENABLED:-false}
+      LEGACY_CHAT_DATA_ROOT: /legacy-data
+      LEGACY_CHAT_DEFAULT_MODEL: ${LEGACY_CHAT_DEFAULT_MODEL:-legacy-import}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://datc.sitp.ac.cn:8505}
       KNOWLEDGE_CHUNK_TOKENS: ${KNOWLEDGE_CHUNK_TOKENS:-600}
       KNOWLEDGE_OVERLAP_TOKENS: ${KNOWLEDGE_OVERLAP_TOKENS:-100}
       KNOWLEDGE_EMBEDDING_BATCH_SIZE: ${KNOWLEDGE_EMBEDDING_BATCH_SIZE:-16}
@@ -115,9 +119,9 @@ services:
       OAUTH2_SERVER: ${OAUTH2_SERVER:?OAUTH2_SERVER is required}
       OAUTH2_CLIENT_ID: ${OAUTH2_CLIENT_ID:?OAUTH2_CLIENT_ID is required}
       OAUTH2_CLIENT_SECRET: ${OAUTH2_CLIENT_SECRET:?OAUTH2_CLIENT_SECRET is required}
-      OAUTH2_REDIRECT_URI: ${OAUTH2_REDIRECT_URI:-http://192.168.88.103:8505}
+      OAUTH2_REDIRECT_URI: ${OAUTH2_REDIRECT_URI:-https://datc.sitp.ac.cn:8505}
       OAUTH2_SEND_STATE: ${OAUTH2_SEND_STATE:-false}
-      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       SPRING_SESSION_STORE_TYPE: redis
       SPRING_SESSION_TIMEOUT: ${SESSION_TIMEOUT:-8h}
       SPRING_DATA_REDIS_HOST: redis
@@ -136,6 +140,8 @@ services:
       retries: 12
       start_period: 20s
     networks: [platform]
+    volumes:
+      - ${LEGACY_CHAT_DATA_HOST:-./legacy-data}:/legacy-data:ro
     deploy:
       resources:
         limits:
@@ -149,11 +155,17 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      APP_DOMAIN: ${APP_DOMAIN:-ai.sitp.ac.cn}
+      APP_DOMAIN: ${APP_DOMAIN:-datc.sitp.ac.cn}
+      PUBLIC_WEB_BASE_URL: ${PUBLIC_WEB_BASE_URL:-https://datc.sitp.ac.cn:8505}
       CLIENT_MAX_BODY_SIZE: ${CLIENT_MAX_BODY_SIZE:-100m}
-      NGINX_ENVSUBST_FILTER: "^(APP_DOMAIN|CLIENT_MAX_BODY_SIZE)$"
+      SSL_CERTIFICATE: ${SSL_CERTIFICATE:-/etc/nginx/certs/sitp.ac.cn.pem}
+      SSL_CERTIFICATE_KEY: ${SSL_CERTIFICATE_KEY:-/etc/nginx/certs/sitp.ac.cn.key}
+      NGINX_ENVSUBST_FILTER: "^(APP_DOMAIN|PUBLIC_WEB_BASE_URL|CLIENT_MAX_BODY_SIZE|SSL_CERTIFICATE|SSL_CERTIFICATE_KEY)$"
     ports:
-      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${API_PORT:-8510}:8510"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
     depends_on:
       backend: { condition: service_healthy }
     healthcheck:

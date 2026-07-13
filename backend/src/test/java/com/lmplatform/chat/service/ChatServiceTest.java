@@ -141,4 +141,58 @@ class ChatServiceTest {
                 eq(0), eq(0), any(), anyInt(), eq(false)
         );
     }
+
+    /** Confirms editing a user turn stays inside the current conversation and streams a new answer. */
+    @Test
+    void editsUserMessageAndRegeneratesInCurrentConversation() throws Exception {
+        ConversationRepository repository = mock(ConversationRepository.class);
+        AiServiceClient client = mock(AiServiceClient.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        ChatService service = new ChatService(
+                repository, client, objectMapper, mock(TitleGenerationService.class),
+                new AiServiceProperties("http://localhost:8001", 150, "deepseek-chat", 40),
+                mock(ObjectStorageService.class), mock(KnowledgeBaseService.class),
+                mock(KnowledgeSearchService.class)
+        );
+        UUID conversationId = UUID.randomUUID();
+        UUID originalUserId = UUID.randomUUID();
+        UUID editedUserId = UUID.randomUUID();
+        UUID assistantId = UUID.randomUUID();
+        UUID versionGroupId = UUID.randomUUID();
+        when(repository.replaceUserMessageForRegeneration(
+                conversationId, originalUserId, 1L, "edited question"
+        )).thenReturn(new ConversationRepository.MessageVersion(versionGroupId, 2, editedUserId));
+        when(repository.appendVersionedMessage(
+                conversationId, "assistant", "", "generating", versionGroupId, 2
+        ))
+                .thenReturn(assistantId);
+        when(repository.modelContextMessages(conversationId, 40))
+                .thenReturn(List.of(new ModelContextMessage("user", "edited question", List.of())));
+        doAnswer(invocation -> {
+            AiServiceClient.EventConsumer consumer = invocation.getArgument(3);
+            consumer.accept(objectMapper.readTree("{\"type\":\"delta\",\"content\":\"new answer\"}"));
+            consumer.accept(objectMapper.readTree("{\"type\":\"done\"}"));
+            return null;
+        }).when(client).streamChat(eq("deepseek-chat"), any(), eq(true), any());
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        service.editAndRegenerate(
+                1L, conversationId, originalUserId,
+                "edited question", "deepseek-chat", true, output
+        );
+
+        String stream = output.toString(StandardCharsets.UTF_8);
+        assertThat(stream).contains(
+                "edit_metadata", editedUserId.toString(), "\"version_index\":2", conversationId.toString()
+        );
+        verify(repository).replaceUserMessageForRegeneration(
+                conversationId, originalUserId, 1L, "edited question"
+        );
+        verify(repository).appendVersionedMessage(
+                conversationId, "assistant", "", "generating", versionGroupId, 2
+        );
+        verify(repository).finishAssistantMessage(
+                assistantId, "new answer", "completed", 0, 0, null, null, null
+        );
+    }
 }

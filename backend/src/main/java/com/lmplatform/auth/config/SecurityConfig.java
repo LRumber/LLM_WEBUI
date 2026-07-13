@@ -24,17 +24,10 @@ public class SecurityConfig {
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         return http
                 .csrf(csrf -> csrf.ignoringRequestMatchers(
-                        "/actuator/health", "/api/auth/**", "/api/chat/**", "/api/conversations/**",
-                        "/api/files/**", "/api/speech/**", "/api/prompt-templates/**", "/api/admin/**",
-                        "/api/knowledge-bases/**", "/api/teams/**", "/api/announcement/**"
+                        "/actuator/health", "/api/**"
                 ))
                 .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers("/api/health", "/api/auth/**", "/actuator/health").permitAll()
-                        .requestMatchers(
-                                "/api/models", "/api/chat/**", "/api/conversations/**",
-                                "/api/files/**", "/api/speech/**", "/api/prompt-templates/**", "/api/admin/**",
-                                "/api/knowledge-bases/**", "/api/teams/**", "/api/announcement/**"
-                        ).permitAll()
+                        .requestMatchers("/api/**", "/actuator/health", "/error").permitAll()
                         .anyRequest().authenticated())
                 .build();
     }

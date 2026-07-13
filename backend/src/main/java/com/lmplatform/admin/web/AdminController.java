@@ -1,7 +1,7 @@
 package com.lmplatform.admin.web;
 
 import com.lmplatform.admin.model.AdminOverview;
-import com.lmplatform.admin.model.AdminUserSummary;
+import com.lmplatform.admin.model.AdminUserPage;
 import com.lmplatform.admin.model.DailyUsageSummary;
 import com.lmplatform.admin.repository.AdminRepository;
 import java.util.List;
@@ -36,8 +36,12 @@ public class AdminController {
     }
 
     @GetMapping("/users")
-    public List<AdminUserSummary> users() {
-        return repository.users();
+    public AdminUserPage users(
+            @RequestParam(defaultValue = "") String q,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return repository.users(q, Math.max(0, page), Math.max(10, Math.min(size, 100)));
     }
 
     @PatchMapping("/users/{userId}/administrator")

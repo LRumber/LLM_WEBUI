@@ -13,6 +13,7 @@ import com.lmplatform.auth.config.SecurityConfig;
 import com.lmplatform.auth.repository.ShadowUserRepository;
 import com.lmplatform.auth.service.OAuth2LoginService;
 import com.lmplatform.auth.model.AuthenticatedShadowUser;
+import com.lmplatform.chat.service.LegacyChatImportService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -35,6 +36,9 @@ class AuthControllerTest {
 
     @MockBean
     private ShadowUserRepository shadowUserRepository;
+
+    @MockBean
+    private LegacyChatImportService legacyChatImportService;
 
     /** Verifies the login route supplies the provider-compatible code-flow parameters. */
     @Test

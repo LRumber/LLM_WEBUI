@@ -4,12 +4,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     AI_MODEL_CONFIG_PATH=/app/config/models.json
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    export DEBIAN_FRONTEND=noninteractive; \
+    for attempt in 1 2 3; do \
+      apt-get update \
+      && apt-get install -y --no-install-recommends --download-only \
+         tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng fonts-noto-cjk \
+         ffmpeg \
+      && break; \
+      if [ "$attempt" = "3" ]; then exit 1; fi; \
+      rm -rf /var/lib/apt/lists/*; \
+      sleep 8; \
+    done; \
+    apt-get install -y --no-install-recommends \
        tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng fonts-noto-cjk \
-       libreoffice-writer libreoffice-calc libreoffice-impress \
-       ffmpeg \
-    && rm -rf /var/lib/apt/lists/* \
+       ffmpeg; \
+    rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app app
 

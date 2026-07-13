@@ -60,6 +60,10 @@ platform:
     title-model: ${AI_TITLE_MODEL:deepseek-chat}
     # Bound history independently from model token limits; provider tokenization remains authoritative.
     max-context-messages: ${AI_MAX_CONTEXT_MESSAGES:40}
+  legacy-chat-import:
+    enabled: ${LEGACY_CHAT_IMPORT_ENABLED:false}
+    data-root: ${LEGACY_CHAT_DATA_ROOT:/legacy-data}
+    default-model: ${LEGACY_CHAT_DEFAULT_MODEL:legacy-import}
   object-storage:
     endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
     access-key: ${MINIO_ROOT_USER:lm_platform}

@@ -4,7 +4,6 @@ import pytest
 from fastapi import UploadFile
 
 from app.documents import DocumentParseError, DocumentParser
-from app.models import ParsedDocument
 
 
 @pytest.mark.asyncio
@@ -29,21 +28,13 @@ async def test_rejects_unsupported_executable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_legacy_word_uses_local_office_conversion(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Binary Office files should be converted locally before entering package parsers."""
+async def test_legacy_word_is_handled_by_backend() -> None:
+    """Binary Office files are parsed by the backend Apache POI pipeline."""
     parser = DocumentParser()
-
-    monkeypatch.setattr(parser, "_convert_office", lambda payload, source, target: b"docx")
-    monkeypatch.setattr(
-        parser,
-        "_parse_docx",
-        lambda payload, media_type: ParsedDocument(media_type=media_type, text=payload.decode()),
-    )
     upload = UploadFile(filename="legacy.doc", file=__import__("io").BytesIO(b"old-office"))
 
-    result = await parser.parse(upload)
-
-    assert result.text == "docx"
+    with pytest.raises(DocumentParseError, match="backend Apache POI"):
+        await parser.parse(upload)
 
 
 def test_scanned_pdf_falls_back_to_ocr(monkeypatch: pytest.MonkeyPatch) -> None:

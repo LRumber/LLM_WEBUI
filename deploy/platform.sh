@@ -3,11 +3,27 @@ set -euo pipefail
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$DEPLOY_DIR/.." && pwd)"
-COMPOSE=(docker compose --env-file "$ROOT_DIR/.env")
-if [[ -f "$DEPLOY_DIR/runtime.env" ]]; then
-  COMPOSE+=(--env-file "$DEPLOY_DIR/runtime.env")
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/.env"
+  set +a
 fi
-COMPOSE+=(-f "$DEPLOY_DIR/docker-compose.yml")
+if [[ -f "$DEPLOY_DIR/runtime.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$DEPLOY_DIR/runtime.env"
+  set +a
+fi
+
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE=(docker compose -f "$DEPLOY_DIR/docker-compose.yml")
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE=(docker-compose -f "$DEPLOY_DIR/docker-compose.yml")
+else
+  echo "Docker Compose is required. Install docker compose plugin or docker-compose." >&2
+  exit 1
+fi
 
 require_files() {
   [[ -f "$ROOT_DIR/.env" ]] || { echo "Missing $ROOT_DIR/.env" >&2; exit 1; }

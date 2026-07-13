@@ -2,9 +2,6 @@ package com.lmplatform.common.repository;
 
 import com.lmplatform.common.model.ModelDefaults;
 import com.lmplatform.common.model.DeploymentSettings;
-import com.lmplatform.common.model.PlatformAnnouncement;
-import com.lmplatform.common.model.PlatformAnnouncementRequest;
-import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,10 +16,6 @@ public class SystemSettingRepository {
     private static final String DEPLOYMENT_DOMAIN = "deployment_domain";
     private static final String DEPLOYMENT_HTTP_PORT = "deployment_http_port";
     private static final String DEPLOYMENT_HTTPS_PORT = "deployment_https_port";
-    private static final String ANNOUNCEMENT_REVISION = "platform_announcement_revision";
-    private static final String ANNOUNCEMENT_TITLE = "platform_announcement_title";
-    private static final String ANNOUNCEMENT_BODY = "platform_announcement_body";
-    private static final String ANNOUNCEMENT_PUBLISHED = "platform_announcement_published";
 
     private final JdbcTemplate jdbc;
 
@@ -78,47 +71,6 @@ public class SystemSettingRepository {
         return deploymentSettings();
     }
 
-    public PlatformAnnouncement announcement() {
-        return new PlatformAnnouncement(
-                setting(ANNOUNCEMENT_REVISION),
-                setting(ANNOUNCEMENT_TITLE),
-                setting(ANNOUNCEMENT_BODY),
-                Boolean.parseBoolean(setting(ANNOUNCEMENT_PUBLISHED))
-        );
-    }
-
-    public Optional<PlatformAnnouncement> currentAnnouncement() {
-        PlatformAnnouncement announcement = announcement();
-        if (!announcement.published() || announcement.title().isBlank() || announcement.body().isBlank()) {
-            return Optional.empty();
-        }
-        return Optional.of(announcement);
-    }
-
-    @Transactional
-    public PlatformAnnouncement saveAnnouncement(PlatformAnnouncementRequest request) {
-        String title = normalize(request.title());
-        String body = normalize(request.body());
-        if (title.length() > 120) {
-            throw new IllegalArgumentException("Announcement title must be 120 characters or fewer");
-        }
-        if (body.length() > 5000) {
-            throw new IllegalArgumentException("Announcement body must be 5000 characters or fewer");
-        }
-        if (request.published() && (title.isBlank() || body.isBlank())) {
-            throw new IllegalArgumentException("Published announcement requires both title and body");
-        }
-
-        long nextRevision = parseLong(setting(ANNOUNCEMENT_REVISION), 0L) + 1L;
-        upsert(ANNOUNCEMENT_REVISION, String.valueOf(nextRevision),
-                "Monotonic revision for the user-facing product announcement.");
-        upsert(ANNOUNCEMENT_TITLE, title, "Title of the user-facing product announcement.");
-        upsert(ANNOUNCEMENT_BODY, body, "Body of the user-facing product announcement.");
-        upsert(ANNOUNCEMENT_PUBLISHED, String.valueOf(request.published()),
-                "Whether the product announcement is visible to users.");
-        return announcement();
-    }
-
     private String setting(String key) {
         return jdbc.query("""
                 SELECT setting_value FROM system_setting WHERE setting_key = ?
@@ -150,14 +102,6 @@ public class SystemSettingRepository {
         try {
             int parsed = Integer.parseInt(value);
             return parsed > 0 && parsed <= 65535 ? parsed : fallback;
-        } catch (NumberFormatException exception) {
-            return fallback;
-        }
-    }
-
-    private long parseLong(String value, long fallback) {
-        try {
-            return Long.parseLong(value);
         } catch (NumberFormatException exception) {
             return fallback;
         }

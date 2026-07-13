@@ -3,6 +3,7 @@ package com.lmplatform.auth.web;
 import com.lmplatform.auth.config.OAuth2GatewayProperties;
 import com.lmplatform.auth.repository.ShadowUserRepository;
 import com.lmplatform.auth.service.OAuth2LoginService;
+import com.lmplatform.chat.service.LegacyChatImportService;
 import com.lmplatform.admin.model.AdminPrincipal;
 import com.lmplatform.admin.web.AdminSession;
 import jakarta.servlet.http.HttpSession;
@@ -27,17 +28,20 @@ public class AuthController {
     private final OAuth2GatewayProperties properties;
     private final OAuth2LoginService loginService;
     private final ShadowUserRepository shadowUserRepository;
+    private final LegacyChatImportService legacyChatImportService;
     private final boolean devLoginEnabled;
 
     public AuthController(
             OAuth2GatewayProperties properties,
             OAuth2LoginService loginService,
             ShadowUserRepository shadowUserRepository,
+            LegacyChatImportService legacyChatImportService,
             @Value("${platform.auth.dev-login-enabled:false}") boolean devLoginEnabled
     ) {
         this.properties = properties;
         this.loginService = loginService;
         this.shadowUserRepository = shadowUserRepository;
+        this.legacyChatImportService = legacyChatImportService;
         this.devLoginEnabled = devLoginEnabled;
     }
 
@@ -94,6 +98,7 @@ public class AuthController {
             var user = loginService.authenticate(code);
             session.setAttribute(UserSession.USER_ID_KEY, user.id());
             session.setAttribute(UserSession.USER_KEY, user);
+            legacyChatImportService.importAfterLogin(user);
             if (user.administrator()) {
                 session.setMaxInactiveInterval(AdminSession.MAX_INACTIVE_SECONDS);
                 session.setAttribute(AdminSession.PRINCIPAL_KEY, new AdminPrincipal(
@@ -117,27 +122,32 @@ public class AuthController {
 
     /** Creates a deterministic local-only user session for feature development without the identity gateway. */
     @PostMapping("/dev-login")
-    public ResponseEntity<?> devLogin(HttpSession session) {
+    public ResponseEntity<?> devLogin(
+            @RequestParam(defaultValue = "DEV001") String user,
+            HttpSession session
+    ) {
         if (!devLoginEnabled) {
             return ResponseEntity.status(404).body(new AuthError("dev_login_disabled", "Local development login is disabled"));
         }
-        var user = shadowUserRepository.upsert(
-                900000001L,
-                "DEV-LOCAL-USER",
-                "dev-local",
-                "本机调试用户",
-                "DEV001",
+        boolean member = "DEV002".equalsIgnoreCase(user) || "dev-member".equalsIgnoreCase(user);
+        var loginUser = shadowUserRepository.upsert(
+                member ? 900000002L : 900000001L,
+                member ? "DEV-TEAM-MEMBER" : "DEV-LOCAL-USER",
+                member ? "dev-member" : "dev-local",
+                member ? "本机调试成员" : "本机调试用户",
+                member ? "DEV002" : "DEV001",
                 1L,
                 (short) 1,
-                "dev-local",
-                "dev-local@example.test",
+                member ? "dev-member" : "dev-local",
+                member ? "dev-member@example.test" : "dev-local@example.test",
                 null,
                 null,
                 (short) 1
         );
-        session.setAttribute(UserSession.USER_ID_KEY, user.id());
-        session.setAttribute(UserSession.USER_KEY, user);
-        return ResponseEntity.ok(user);
+        session.setAttribute(UserSession.USER_ID_KEY, loginUser.id());
+        session.setAttribute(UserSession.USER_KEY, loginUser);
+        legacyChatImportService.importAfterLogin(loginUser);
+        return ResponseEntity.ok(loginUser);
     }
 
     /** Clears both the user and optional administrator principals from the local session. */

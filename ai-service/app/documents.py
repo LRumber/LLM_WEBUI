@@ -1,11 +1,7 @@
 """Extract text, tables, and basic metadata from supported offline document formats."""
 
 import io
-import os
 from pathlib import Path
-import shutil
-import subprocess
-import tempfile
 
 from fastapi import UploadFile
 
@@ -37,7 +33,7 @@ class DocumentParser:
         if suffix == ".pptx":
             return self._parse_pptx(payload, media_type)
         if suffix in {".doc", ".xls", ".ppt"}:
-            return self._parse_legacy_office(payload, suffix, media_type)
+            raise DocumentParseError("Legacy Office formats are parsed by the backend Apache POI pipeline")
         if suffix in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}:
             return self._parse_image(payload, media_type)
         raise DocumentParseError(f"Unsupported file type: {suffix or 'unknown'}")
@@ -110,52 +106,6 @@ class DocumentParser:
             raise DocumentParseError("PowerPoint parser is not installed") from exc
         except Exception as exc:
             raise DocumentParseError(f"PowerPoint parsing failed: {exc}") from exc
-
-    def _parse_legacy_office(self, payload: bytes, suffix: str, media_type: str) -> ParsedDocument:
-        """Convert binary Office files with local LibreOffice before normal package parsing."""
-        targets = {".doc": ".docx", ".xls": ".xlsx", ".ppt": ".pptx"}
-        target_suffix = targets[suffix]
-        converted = self._convert_office(payload, suffix, target_suffix)
-        if target_suffix == ".docx":
-            return self._parse_docx(converted, media_type)
-        if target_suffix == ".xlsx":
-            return self._parse_xlsx(converted, media_type)
-        return self._parse_pptx(converted, media_type)
-
-    def _convert_office(self, payload: bytes, source_suffix: str, target_suffix: str) -> bytes:
-        soffice = shutil.which("soffice") or shutil.which("libreoffice")
-        if not soffice:
-            raise DocumentParseError("LibreOffice is not installed")
-        with tempfile.TemporaryDirectory(prefix="lm-office-") as workspace:
-            workdir = Path(workspace)
-            source = workdir / f"upload{source_suffix}"
-            source.write_bytes(payload)
-            env = os.environ.copy()
-            env["HOME"] = workspace
-            result = subprocess.run(
-                [
-                    soffice,
-                    "--headless",
-                    "--nologo",
-                    "--nofirststartwizard",
-                    "--nodefault",
-                    "--convert-to",
-                    target_suffix.lstrip("."),
-                    "--outdir",
-                    workspace,
-                    str(source),
-                ],
-                cwd=workspace,
-                env=env,
-                capture_output=True,
-                timeout=120,
-                check=False,
-            )
-            converted = workdir / f"upload{target_suffix}"
-            if result.returncode != 0 or not converted.exists():
-                detail = (result.stderr or result.stdout).decode("utf-8", errors="ignore")[:300]
-                raise DocumentParseError(f"Office conversion failed: {detail or 'no output file'}")
-            return converted.read_bytes()
 
     def _parse_image(self, payload: bytes, media_type: str) -> ParsedDocument:
         """Run local OCR when Pillow and Tesseract bindings are available."""

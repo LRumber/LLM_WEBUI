@@ -129,6 +129,39 @@ public class ChatService {
         streamAssistant(userId, conversationId, replacementId, model, false, null, false, citations, output);
     }
 
+    /** Edits a user turn, hides following stale messages, then streams a fresh answer. */
+    public void editAndRegenerate(
+            long userId,
+            UUID conversationId,
+            UUID userMessageId,
+            String content,
+            String model,
+            boolean thinkingEnabled,
+            OutputStream output
+    ) throws IOException {
+        ConversationRepository.MessageVersion replacementVersion = repository.replaceUserMessageForRegeneration(
+                conversationId, userMessageId, userId, content
+        );
+        if (replacementVersion == null) {
+            writeEvent(output, Map.of("type", "error", "message", "User message not found"));
+            return;
+        }
+        writeEvent(output, Map.of(
+                "type", "edit_metadata",
+                "message_id", replacementVersion.messageId(),
+                "version_index", replacementVersion.versionIndex()
+        ));
+        UUID assistantMessageId = repository.appendVersionedMessage(
+                conversationId, "assistant", "", "generating",
+                replacementVersion.groupId(), replacementVersion.versionIndex()
+        );
+        List<KnowledgeSearchResult> citations = retrieveKnowledge(conversationId, userId, content);
+        streamAssistant(
+                userId, conversationId, assistantMessageId, model, false,
+                null, thinkingEnabled, citations, output
+        );
+    }
+
     /** Runs the shared generation lifecycle for new turns and regenerated answers. */
     private void streamAssistant(
             long userId,

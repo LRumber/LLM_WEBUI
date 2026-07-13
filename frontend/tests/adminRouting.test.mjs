@@ -8,6 +8,7 @@ test('maps each administration module to an independent URL', () => {
   assert.equal(resolveAdminPage('/admin/usage'), 'usage')
   assert.equal(resolveAdminPage('/admin/models'), 'models')
   assert.equal(resolveAdminPage('/admin/prompts'), 'prompts')
+  assert.equal(resolveAdminPage('/admin/announcements'), 'announcements')
   assert.equal(resolveAdminPage('/admin/settings'), 'settings')
 })
 

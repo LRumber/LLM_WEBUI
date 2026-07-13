@@ -14,22 +14,27 @@ public class FileProcessingService {
     private final FileRepository repository;
     private final AiServiceClient aiServiceClient;
     private final KnowledgeIndexingService knowledgeIndexingService;
+    private final LegacyOfficeParser legacyOfficeParser;
 
     public FileProcessingService(
             FileRepository repository,
             AiServiceClient aiServiceClient,
-            KnowledgeIndexingService knowledgeIndexingService
+            KnowledgeIndexingService knowledgeIndexingService,
+            LegacyOfficeParser legacyOfficeParser
     ) {
         this.repository = repository;
         this.aiServiceClient = aiServiceClient;
         this.knowledgeIndexingService = knowledgeIndexingService;
+        this.legacyOfficeParser = legacyOfficeParser;
     }
 
     @Async("fileTaskExecutor")
     public void process(UUID fileId, byte[] content, String filename, String mediaType) {
         repository.markProcessing(fileId);
         try {
-            repository.complete(fileId, aiServiceClient.parseDocument(content, filename, mediaType));
+            repository.complete(fileId, legacyOfficeParser.supports(filename)
+                    ? legacyOfficeParser.parse(content, filename, mediaType)
+                    : aiServiceClient.parseDocument(content, filename, mediaType));
             knowledgeIndexingService.indexFile(fileId);
         } catch (Exception | LinkageError exception) {
             // Linkage errors must also finish the durable task instead of leaving it stuck in processing.

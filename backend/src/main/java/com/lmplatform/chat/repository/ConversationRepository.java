@@ -127,13 +127,61 @@ public class ConversationRepository {
                 Integer.class,
                 conversationId
         );
+        MessageVersion activeVersion = currentActiveVersion(conversationId);
         UUID id = UUID.randomUUID();
-        jdbc.update("""
-                INSERT INTO conversation_message (id, conversation_id, sequence_no, role, content, status)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """, id, conversationId, sequence, role, content, status);
+        if (activeVersion == null) {
+            jdbc.update("""
+                    INSERT INTO conversation_message (id, conversation_id, sequence_no, role, content, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """, id, conversationId, sequence, role, content, status);
+        } else {
+            jdbc.update("""
+                    INSERT INTO conversation_message (
+                        id, conversation_id, sequence_no, role, content, status,
+                        version_group_id, version_index, active_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+                    """, id, conversationId, sequence, role, content, status,
+                    activeVersion.groupId(), activeVersion.versionIndex());
+        }
         jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
         return id;
+    }
+
+    @Transactional
+    public UUID appendVersionedMessage(
+            UUID conversationId,
+            String role,
+            String content,
+            String status,
+            UUID versionGroupId,
+            int versionIndex
+    ) {
+        Integer sequence = jdbc.queryForObject(
+                "SELECT COALESCE(MAX(sequence_no), 0) + 1 FROM conversation_message WHERE conversation_id = ?",
+                Integer.class,
+                conversationId
+        );
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO conversation_message (
+                    id, conversation_id, sequence_no, role, content, status,
+                    version_group_id, version_index, active_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+                """, id, conversationId, sequence, role, content, status, versionGroupId, versionIndex);
+        jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
+        return id;
+    }
+
+    private MessageVersion currentActiveVersion(UUID conversationId) {
+        return jdbc.query("""
+                SELECT version_group_id, version_index
+                FROM conversation_message
+                WHERE conversation_id = ? AND superseded_at IS NULL
+                  AND version_group_id IS NOT NULL AND active_version = TRUE
+                ORDER BY sequence_no DESC LIMIT 1
+                """, (rs, rowNum) -> new MessageVersion(
+                rs.getObject("version_group_id", UUID.class), rs.getInt("version_index")
+        ), conversationId).stream().findFirst().orElse(null);
     }
 
     /** Loads only completed, non-empty messages that are safe to send back to a model. */
@@ -235,6 +283,98 @@ public class ConversationRepository {
                     updated_at = CURRENT_TIMESTAMP
                 WHERE conversation_id = ? AND sequence_no > ? AND superseded_at IS NULL
                 """, conversationId, sequence);
+        jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
+        return true;
+    }
+
+    /** Supersedes the selected user turn and later messages, then prepares the next editable version. */
+    @Transactional
+    public MessageVersion replaceUserMessageForRegeneration(
+            UUID conversationId,
+            UUID messageId,
+            long userId,
+            String content
+    ) {
+        VersionAnchor anchor = jdbc.query("""
+                SELECT cm.sequence_no, cm.version_group_id, cm.version_index
+                FROM conversation_message cm
+                JOIN conversation c ON c.id = cm.conversation_id
+                WHERE cm.id = ? AND cm.conversation_id = ? AND cm.role = 'user'
+                  AND cm.superseded_at IS NULL AND c.user_id = ? AND c.deleted_at IS NULL
+                """, (rs, rowNum) -> new VersionAnchor(
+                rs.getInt("sequence_no"),
+                rs.getObject("version_group_id", UUID.class),
+                rs.getObject("version_index", Integer.class)
+        ), messageId, conversationId, userId)
+                .stream().findFirst().orElse(null);
+        if (anchor == null) {
+            return null;
+        }
+        UUID groupId = anchor.groupId() == null ? UUID.randomUUID() : anchor.groupId();
+        int currentVersionIndex = anchor.versionIndex() == null ? 1 : anchor.versionIndex();
+        if (anchor.groupId() == null) {
+            jdbc.update("""
+                    UPDATE conversation_message
+                    SET version_group_id = ?, version_index = 1, active_version = FALSE,
+                        superseded_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                    WHERE conversation_id = ? AND sequence_no >= ? AND superseded_at IS NULL
+                    """, groupId, conversationId, anchor.sequence());
+        } else {
+            jdbc.update("""
+                    UPDATE conversation_message
+                    SET active_version = FALSE, superseded_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE conversation_id = ? AND version_group_id = ? AND version_index = ?
+                      AND sequence_no >= ? AND superseded_at IS NULL
+                    """, conversationId, groupId, currentVersionIndex, anchor.sequence());
+        }
+        Integer nextVersionIndex = jdbc.queryForObject("""
+                SELECT COALESCE(MAX(version_index), 0) + 1
+                FROM conversation_message
+                WHERE conversation_id = ? AND version_group_id = ?
+                """, Integer.class, conversationId, groupId);
+        UUID replacementId = appendVersionedMessage(
+                conversationId, "user", content.strip(), "completed", groupId, nextVersionIndex
+        );
+        jdbc.update("""
+                UPDATE conversation_message SET edited_at = CURRENT_TIMESTAMP, active_version = TRUE,
+                    updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                """, replacementId);
+        jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
+        return new MessageVersion(groupId, nextVersionIndex, replacementId);
+    }
+
+    @Transactional
+    public boolean activateMessageVersion(UUID conversationId, UUID messageId, long userId, int versionIndex) {
+        MessageVersion current = jdbc.query("""
+                SELECT cm.version_group_id, cm.version_index, cm.id
+                FROM conversation_message cm
+                JOIN conversation c ON c.id = cm.conversation_id
+                WHERE cm.id = ? AND cm.conversation_id = ? AND c.user_id = ? AND c.deleted_at IS NULL
+                  AND cm.role = 'user' AND cm.version_group_id IS NOT NULL
+                """, (rs, rowNum) -> new MessageVersion(
+                rs.getObject("version_group_id", UUID.class),
+                rs.getInt("version_index"),
+                rs.getObject("id", UUID.class)
+        ), messageId, conversationId, userId).stream().findFirst().orElse(null);
+        if (current == null) return false;
+        Integer targetCount = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM conversation_message
+                WHERE conversation_id = ? AND version_group_id = ? AND version_index = ?
+                  AND role = 'user'
+                """, Integer.class, conversationId, current.groupId(), versionIndex);
+        if (targetCount == null || targetCount == 0) return false;
+        jdbc.update("""
+                UPDATE conversation_message
+                SET active_version = FALSE, superseded_at = COALESCE(superseded_at, CURRENT_TIMESTAMP),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE conversation_id = ? AND version_group_id = ?
+                """, conversationId, current.groupId());
+        jdbc.update("""
+                UPDATE conversation_message
+                SET active_version = TRUE, superseded_at = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE conversation_id = ? AND version_group_id = ? AND version_index = ?
+                """, conversationId, current.groupId(), versionIndex);
         jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
         return true;
     }
@@ -582,11 +722,19 @@ public class ConversationRepository {
         List<ConversationMessage> messages = jdbc.query("""
                 SELECT cm.id, cm.role, cm.content, cm.status, cm.input_tokens, cm.output_tokens,
                        cm.reasoning_content, cm.reasoning_duration_ms,
-                       cm.created_at, cm.edited_at
+                       cm.created_at, cm.edited_at, cm.version_index,
+                       CASE WHEN cm.role = 'user' AND cm.version_group_id IS NOT NULL THEN (
+                           SELECT COUNT(DISTINCT version_index)::integer
+                           FROM conversation_message versions
+                           WHERE versions.conversation_id = cm.conversation_id
+                             AND versions.version_group_id = cm.version_group_id
+                             AND versions.role = 'user'
+                       ) ELSE NULL END AS version_count
                 FROM conversation_message cm
                 JOIN conversation c ON c.id = cm.conversation_id
                 WHERE cm.conversation_id = ? AND c.user_id = ? AND c.deleted_at IS NULL
                   AND cm.superseded_at IS NULL
+                  AND cm.active_version = TRUE
                 ORDER BY cm.sequence_no
                 """, (rs, rowNum) -> new ConversationMessage(
                 rs.getObject("id", UUID.class),
@@ -599,6 +747,8 @@ public class ConversationRepository {
                 rs.getObject("reasoning_duration_ms", Integer.class),
                 rs.getObject("created_at", OffsetDateTime.class),
                 rs.getObject("edited_at", OffsetDateTime.class),
+                rs.getObject("version_index", Integer.class),
+                rs.getObject("version_count", Integer.class),
                 List.of(),
                 List.of()
         ), conversationId, userId);
@@ -642,9 +792,18 @@ public class ConversationRepository {
                 message.id(), message.role(), message.content(), message.status(),
                 message.inputTokens(), message.outputTokens(),
                 message.reasoningContent(), message.reasoningDurationMs(),
-                message.createdAt(), message.editedAt(),
+                message.createdAt(), message.editedAt(), message.versionIndex(), message.versionCount(),
                 List.copyOf(attachments.getOrDefault(message.id(), List.of())),
                 List.copyOf(citations.getOrDefault(message.id(), List.of()))
         )).toList();
+    }
+
+    public record MessageVersion(UUID groupId, int versionIndex, UUID messageId) {
+        public MessageVersion(UUID groupId, int versionIndex) {
+            this(groupId, versionIndex, null);
+        }
+    }
+
+    private record VersionAnchor(int sequence, UUID groupId, Integer versionIndex) {
     }
 }

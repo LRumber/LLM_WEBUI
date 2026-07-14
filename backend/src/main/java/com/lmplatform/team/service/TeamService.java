@@ -34,7 +34,7 @@ public class TeamService {
 
     public List<TeamMemberSummary> members(UUID teamId, long userId) {
         List<TeamMemberSummary> members = repository.members(teamId, userId);
-        if (members.isEmpty()) throw new TeamAccessException("Team not found");
+        if (members.isEmpty()) throw new TeamAccessException("团队不存在，或当前账号无权访问");
         return members;
     }
 
@@ -42,11 +42,11 @@ public class TeamService {
             UUID teamId, long userId, TeamMemberRequest request
     ) {
         if (!repository.canManage(teamId, userId)) {
-            throw new TeamAccessException("Team management permission is required");
+            throw new TeamAccessException("当前账号没有团队成员管理权限");
         }
         long targetUserId = repository.resolveShadowUser(request.identifier().strip())
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "User has not signed in through OAuth2 and no shadow user exists"
+                        "未找到该用户，请确认用户已登录过本系统，并输入姓名、工号、账号或用户 ID"
                 ));
         repository.addMember(teamId, targetUserId, userId, request.resolvedRole());
         return repository.members(teamId, userId).stream()
@@ -55,7 +55,7 @@ public class TeamService {
 
     public void removeMember(UUID teamId, long targetUserId, long userId) {
         if (!repository.removeMember(teamId, targetUserId, userId)) {
-            throw new TeamAccessException("Member not found or cannot remove the team owner");
+            throw new TeamAccessException("成员不存在，或不能移除团队所有者");
         }
     }
 

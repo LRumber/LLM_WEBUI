@@ -43,6 +43,15 @@ const friendlyTeamCreateError = (message?: string) => {
   return message || '当前不是团队管理员，请联系系统管理员进行添加'
 }
 
+const friendlyTeamMemberError = (message?: string) => {
+  if (!message) return '添加成员失败，请确认用户已登录过本系统'
+  if (message.includes('User has not signed in') || message.includes('shadow user')) {
+    return '未找到该用户，请确认用户已登录过本系统，并输入姓名、工号、账号或用户 ID'
+  }
+  if (message.includes('Team management permission')) return '当前账号没有团队成员管理权限'
+  return message
+}
+
 const loadTeams = async () => {
   const response = await fetch('/api/teams')
   if (!response.ok) return
@@ -94,7 +103,7 @@ const addMember = async () => {
   })
   if (!response.ok) {
     const error = await response.json().catch(() => null)
-    errorMessage.value = error?.message || '添加成员失败'
+    errorMessage.value = friendlyTeamMemberError(error?.message)
     return
   }
   memberIdentifier.value = ''
@@ -157,9 +166,9 @@ onMounted(async () => {
         </header>
 
         <section v-if="canManage" class="team-add-member">
-          <div><UserPlus :size="18" /><span><strong>添加已有用户</strong><small>输入账号、用户编号或平台用户 ID</small></span></div>
+          <div><UserPlus :size="18" /><span><strong>添加已有用户</strong><small>输入姓名、工号、账号或平台用户 ID</small></span></div>
           <form @submit.prevent="addMember">
-            <input v-model="memberIdentifier" required placeholder="用户名 / 用户编号 / ID" />
+            <input v-model="memberIdentifier" required placeholder="姓名 / 工号 / 账号 / ID" />
             <select v-model="memberRole"><option value="member">普通成员</option><option value="admin">团队管理员</option></select>
             <button type="submit">添加</button>
           </form>
@@ -170,7 +179,7 @@ onMounted(async () => {
         <div class="team-member-list">
           <article v-for="member in members" :key="member.userId">
             <span class="team-member-avatar">{{ member.displayName.slice(0, 1) }}</span>
-            <div><strong>{{ member.displayName }}</strong><small>{{ member.accountNumber }}<template v-if="member.userNumber"> · {{ member.userNumber }}</template> · ID {{ member.userId }}</small></div>
+            <div><strong>{{ member.displayName }}</strong><small><template v-if="member.userNumber">工号 {{ member.userNumber }} · </template>ID {{ member.userId }}</small></div>
             <b>{{ roleLabel(member.role) }}</b>
             <button v-if="canManage && member.role !== 'owner'" type="button" title="移除成员" @click="removeMember(member)"><Trash2 :size="15" /></button>
           </article>

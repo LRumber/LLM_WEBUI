@@ -79,14 +79,19 @@ public class TeamRepository {
         try {
             numericId = Long.parseLong(identifier);
         } catch (NumberFormatException ignored) {
-            // Account and user-number matching below handles nonnumeric identifiers.
+            // Account, user-number, and display-name matching below handles nonnumeric identifiers.
         }
         return jdbc.query("""
                 SELECT id FROM app_user
                 WHERE status = 1
-                  AND (id = ? OR account_number = ? OR user_number = ? OR id_no = ? OR username = ?)
+                  AND (
+                      id = ? OR account_number = ? OR user_number = ? OR id_no = ?
+                      OR display_name = ?
+                  )
+                ORDER BY CASE WHEN user_number = ? THEN 0 WHEN display_name = ? THEN 1 ELSE 2 END, id
                 LIMIT 1
-                """, (rs, rowNum) -> rs.getLong("id"), numericId, identifier, identifier, identifier, identifier)
+                """, (rs, rowNum) -> rs.getLong("id"),
+                numericId, identifier, identifier, identifier, identifier, identifier, identifier)
                 .stream().findFirst();
     }
 

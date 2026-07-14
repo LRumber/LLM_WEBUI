@@ -67,7 +67,7 @@ public class OAuth2LoginService {
                 externalUserId, idNo, account, displayName,
                 text(user, "userNumber"),
                 nullableLong(user, "tenantId"), nullableShort(user, "idType"),
-                text(user, "username"), text(user, "email"),
+                null, text(user, "email"),
                 text(user, "tel", "telephone", "phone", "mobile"),
                 text(user, "imgPath", "avatarPath", "avatar"), status
         );

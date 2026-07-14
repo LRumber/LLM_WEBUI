@@ -73,7 +73,7 @@ public class AdminRepository {
         int offset = normalizedPage * normalizedSize;
         String pattern = "%" + normalizedQuery + "%";
         Object[] searchParameters = new Object[] {
-                normalizedQuery, pattern, pattern, pattern, pattern, pattern
+                normalizedQuery, pattern, pattern, pattern, pattern
         };
         long total = jdbc.queryForObject("""
                 SELECT COUNT(*)
@@ -82,8 +82,7 @@ public class AdminRepository {
                    OR LOWER(COALESCE(user_account.account_number, '')) LIKE ?
                    OR LOWER(COALESCE(user_account.display_name, '')) LIKE ?
                    OR LOWER(COALESCE(user_account.user_number, '')) LIKE ?
-                   OR LOWER(COALESCE(user_account.email, '')) LIKE ?
-                   OR LOWER(COALESCE(user_account.username, '')) LIKE ?)
+                   OR LOWER(COALESCE(user_account.email, '')) LIKE ?)
                 """, Long.class, searchParameters);
         List<AdminUserSummary> users = jdbc.query("""
                 SELECT user_account.id, user_account.account_number, user_account.user_number,
@@ -118,8 +117,7 @@ public class AdminRepository {
                    OR LOWER(COALESCE(user_account.account_number, '')) LIKE ?
                    OR LOWER(COALESCE(user_account.display_name, '')) LIKE ?
                    OR LOWER(COALESCE(user_account.user_number, '')) LIKE ?
-                   OR LOWER(COALESCE(user_account.email, '')) LIKE ?
-                   OR LOWER(COALESCE(user_account.username, '')) LIKE ?)
+                   OR LOWER(COALESCE(user_account.email, '')) LIKE ?)
                 ORDER BY user_account.updated_at DESC
                 LIMIT ? OFFSET ?
                 """, (rs, rowNum) -> new AdminUserSummary(
@@ -137,7 +135,7 @@ public class AdminRepository {
                 rs.getLong("api_used_tokens"),
                 rs.getLong("api_request_count"),
                 rs.getInt("api_key_count")
-        ), DEFAULT_API_TOKEN_QUOTA, normalizedQuery, pattern, pattern, pattern, pattern, pattern, normalizedSize, offset);
+        ), DEFAULT_API_TOKEN_QUOTA, normalizedQuery, pattern, pattern, pattern, pattern, normalizedSize, offset);
         return new AdminUserPage(users, total, normalizedPage, normalizedSize);
     }
 

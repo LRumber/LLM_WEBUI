@@ -86,7 +86,8 @@ public class AdminRepository {
                    OR LOWER(COALESCE(user_account.username, '')) LIKE ?)
                 """, Long.class, searchParameters);
         List<AdminUserSummary> users = jdbc.query("""
-                SELECT user_account.id, user_account.account_number, user_account.display_name,
+                SELECT user_account.id, user_account.account_number, user_account.user_number,
+                       user_account.display_name,
                        user_account.status, user_account.is_admin, user_account.is_team_admin,
                        user_account.last_login_at,
                        COALESCE(conversations.conversation_count, 0) AS conversation_count,
@@ -124,6 +125,7 @@ public class AdminRepository {
                 """, (rs, rowNum) -> new AdminUserSummary(
                 rs.getLong("id"),
                 rs.getString("account_number"),
+                rs.getString("user_number"),
                 rs.getString("display_name"),
                 rs.getShort("status"),
                 rs.getBoolean("is_admin"),

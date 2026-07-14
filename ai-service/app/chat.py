@@ -67,22 +67,21 @@ class ChatGateway:
         model: ModelEndpoint,
     ) -> AsyncIterator[dict]:
         """Call an upstream endpoint after the per-model concurrency slot is acquired."""
-        api_key = self._api_key_for(model)
         payload = {
             "model": self._upstream_model_name(request, model),
             "messages": [message.model_dump() for message in request.messages],
             "temperature": request.temperature,
             "stream": True,
             "stream_options": {"include_usage": True},
-            # Compatible reasoning models commonly expose this raw OpenAI extension.
-            "enable_thinking": request.thinking_enabled,
         }
+        self._apply_reasoning_mode(payload, request, model)
         if request.max_tokens is not None:
             payload["max_tokens"] = request.max_tokens
 
         url = f"{str(model.base_url).rstrip('/')}/chat/completions"
         timeout = httpx.Timeout(self._settings.chat_timeout_seconds, connect=15.0)
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        headers = self._headers_for(model)
+        headers["Content-Type"] = "application/json"
 
         async with httpx.AsyncClient(timeout=timeout, transport=self._transport) as client:
             async with client.stream("POST", url, headers=headers, json=payload) as response:
@@ -135,11 +134,38 @@ class ChatGateway:
             return "deepseek-reasoner"
         return model.model_name
 
+    def _apply_reasoning_mode(
+        self,
+        payload: dict,
+        request: ChatRequest,
+        model: ModelEndpoint,
+    ) -> None:
+        """Apply only the reasoning control understood by the selected model."""
+        if not request.thinking_enabled:
+            if model.reasoning_mode == "qwen3":
+                payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+            elif model.reasoning_mode == "deepseek_v4":
+                payload.setdefault("chat_template_kwargs", {})["thinking"] = False
+            return
+
+        if model.reasoning_mode == "qwen3":
+            # Keep Qwen3 in non-thinking mode until its deployment path is
+            # validated separately.
+            payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+        elif model.reasoning_mode == "deepseek_v4":
+            payload.setdefault("chat_template_kwargs", {}).update(
+                {"thinking": True, "reasoning_effort": "high"}
+            )
+        elif model.reasoning_mode in {"deepseek_r1", "always"}:
+            # These modes expose reasoning in the response stream, usually as
+            # reasoning_content, but do not need an OpenAI request extension.
+            return
+
     async def health(self, model: ModelEndpoint) -> dict:
         """Probe the OpenAI-compatible model listing endpoint and normalize latency and errors."""
         started = time.monotonic()
         url = f"{str(model.base_url).rstrip('/')}/models"
-        headers = {"Authorization": f"Bearer {self._api_key_for(model)}"}
+        headers = self._headers_for(model)
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(8.0, connect=3.0), transport=self._transport
@@ -158,7 +184,11 @@ class ChatGateway:
             "detail": detail,
         }
 
-    def _api_key_for(self, model: ModelEndpoint) -> str:
+    def _headers_for(self, model: ModelEndpoint) -> dict[str, str]:
+        api_key = self._api_key_for(model)
+        return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    def _api_key_for(self, model: ModelEndpoint) -> str | None:
         """Resolve a provider credential while keeping secret values inside the AI process."""
         if model.api_key_env:
             configured = os.getenv(model.api_key_env)
@@ -170,7 +200,7 @@ class ChatGateway:
             return self._settings.deepseek_api_key.get_secret_value()
         if model.engine.value in {"vllm", "sglang", "ollama", "llama.cpp"}:
             return "local-inference"
-        raise ChatConfigurationError(f"API key is not configured for provider: {model.provider}")
+        return None
 
     def _semaphore_for(self, model: ModelEndpoint) -> asyncio.Semaphore:
         """Create or replace a semaphore when an administrator changes the model limit."""

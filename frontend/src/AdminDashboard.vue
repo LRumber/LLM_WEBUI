@@ -33,6 +33,7 @@ interface DailyUsage {
 interface AdminUser {
   id: number
   accountNumber: string
+  userNumber?: string | null
   displayName: string
   status: number
   administrator: boolean
@@ -64,6 +65,7 @@ interface ModelRegistration {
   capabilities: string[]
   enabled: boolean
   frontend_visible: boolean
+  reasoning_mode?: 'none' | 'qwen3' | 'deepseek_v4' | 'deepseek_r1' | 'always'
   context_window?: number | string
   api_key_env?: string
   api_key?: string
@@ -178,7 +180,7 @@ const announcementEditorOpen = ref(false)
 const announcementDetail = ref<PlatformAnnouncement | null>(null)
 const modelForm = ref<ModelRegistration>({
   key: '', display_name: '', provider: 'openai-compatible', engine: 'openai-compatible', category: 'language', base_url: '', model_name: '',
-  capabilities: ['chat'], enabled: true, frontend_visible: true, context_window: 32768, api_key: '',
+  capabilities: ['chat'], enabled: true, frontend_visible: true, reasoning_mode: 'none', context_window: 32768, api_key: '',
 })
 const templateForm = ref({ id: '', name: '', description: '', systemPrompt: '', enabled: true })
 const ADMIN_IDLE_TIMEOUT_MS = 60 * 60 * 1000
@@ -514,7 +516,7 @@ const setTeamAdministrator = async (user: AdminUser) => {
 const createModel = () => {
   modelForm.value = {
     key: '', display_name: '', provider: 'openai-compatible', engine: 'openai-compatible', category: 'language', base_url: '', model_name: '',
-    capabilities: ['chat'], enabled: true, frontend_visible: true, context_window: 32768, api_key: '',
+    capabilities: ['chat'], enabled: true, frontend_visible: true, reasoning_mode: 'none', context_window: 32768, api_key: '',
   }
   modelSaveError.value = ''
   modelDiscoverMessage.value = ''
@@ -524,7 +526,7 @@ const createModel = () => {
 
 /** Copies an existing registration so edits remain cancelable until explicitly saved. */
 const editModel = (model: ModelRegistration) => {
-  modelForm.value = { ...JSON.parse(JSON.stringify(model)), api_key: '' }
+  modelForm.value = { ...JSON.parse(JSON.stringify(model)), reasoning_mode: model.reasoning_mode ?? 'none', api_key: '' }
   modelSaveError.value = ''
   modelDiscoverMessage.value = ''
   discoveredModels.value = []
@@ -1032,6 +1034,15 @@ onUnmounted(() => {
                 <ElOption v-for="option in contextWindowOptions" :key="option.value" :label="option.label" :value="option.value" />
               </ElSelect>
             </label>
+            <label>推理模式
+              <ElSelect v-model="modelForm.reasoning_mode" class="admin-select" popper-class="admin-select-dropdown">
+                <ElOption label="不支持思考" value="none" />
+                <ElOption label="Qwen3 enable_thinking" value="qwen3" />
+                <ElOption label="DeepSeek-V4 thinking_mode" value="deepseek_v4" />
+                <ElOption label="DeepSeek-R1 reasoning_content" value="deepseek_r1" />
+                <ElOption label="始终推理/仅展示推理内容" value="always" />
+              </ElSelect>
+            </label>
             <label class="wide">API 地址<input v-model="modelForm.base_url" type="url" placeholder="http://127.0.0.1:8000/v1" required /></label>
             <label class="wide">API Key<input v-model="modelForm.api_key" type="password" autocomplete="new-password" placeholder="编辑时留空表示保留原密钥" /></label>
             <div class="wide discovery-row">
@@ -1093,11 +1104,11 @@ onUnmounted(() => {
         </form>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>用户</th><th>账号</th><th>状态</th><th>后台权限</th><th>团队权限</th><th>会话数</th><th>对话 Token</th><th>API 总额度</th><th>API 已用</th><th>API 请求</th><th>Key 数</th><th>最近登录</th><th>操作</th></tr></thead>
+            <thead><tr><th>用户</th><th>工号</th><th>状态</th><th>后台权限</th><th>团队权限</th><th>会话数</th><th>对话 Token</th><th>API 总额度</th><th>API 已用</th><th>API 请求</th><th>Key 数</th><th>最近登录</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="user in users" :key="user.id">
                 <td><div class="table-user"><span>{{ user.displayName.slice(0, 1) }}</span><strong>{{ user.displayName }}</strong></div></td>
-                <td>{{ user.accountNumber }}</td>
+                <td>{{ user.userNumber || '-' }}</td>
                 <td><span class="status-pill" :class="{ inactive: user.status !== 1 }">{{ user.status === 1 ? '正常' : '停用' }}</span></td>
                 <td><button class="admin-toggle" :class="{ enabled: user.administrator }" type="button" @click="setAdministrator(user)"><span></span>{{ user.administrator ? '管理员' : '普通用户' }}</button></td>
                 <td><button class="admin-toggle" :class="{ enabled: user.teamAdministrator }" type="button" @click="setTeamAdministrator(user)"><span></span>{{ user.teamAdministrator ? '团队管理员' : '普通成员' }}</button></td>

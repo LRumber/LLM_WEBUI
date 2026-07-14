@@ -13,7 +13,7 @@ async def test_speech_gateway_calls_audio_transcriptions():
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/audio/transcriptions"
-        assert request.headers["Authorization"] == "Bearer local-inference"
+        assert request.headers.get("authorization") is None
         body = request.content
         assert b'name="model"\r\n\r\nQwen/Qwen3-ASR-1.7B' in body
         assert b'name="language"\r\n\r\nzh' in body
@@ -42,3 +42,28 @@ def test_speech_gateway_cleans_language_prefix_without_marker():
     """Handle providers that return language metadata without the Qwen marker."""
 
     assert SpeechGateway()._clean_transcript("language English Hello world.") == "Hello world."
+
+
+@pytest.mark.asyncio
+async def test_speech_gateway_omits_authorization_when_api_key_is_blank():
+    """Support no-auth local OpenAI-compatible ASR endpoints."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/audio/transcriptions"
+        assert "Authorization" not in request.headers
+        return httpx.Response(200, json={"text": "hello"})
+
+    gateway = SpeechGateway(transport=httpx.MockTransport(handler))
+    model = ModelEndpoint(
+        key="local-asr",
+        display_name="Local ASR",
+        provider="openai-compatible",
+        base_url="http://local-asr/v1",
+        model_name="local-asr",
+        category="speech",
+        capabilities={ModelCapability.SPEECH_TO_TEXT},
+    )
+
+    text = await gateway.transcribe(model, b"fake wav", "recording.wav", "audio/wav")
+
+    assert text == "hello"

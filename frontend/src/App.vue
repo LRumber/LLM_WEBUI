@@ -59,6 +59,7 @@ interface ChatMessage {
   versionIndex?: number | null
   versionCount?: number | null
   attachments?: UploadedFile[]
+  quotedText?: string
   reasoningContent?: string
   reasoningDurationMs?: number | null
   reasoningExpanded?: boolean
@@ -100,6 +101,7 @@ interface ModelInfo {
   key: string
   display_name: string
   capabilities: string[]
+  reasoning_mode?: 'none' | 'qwen3' | 'deepseek_v4' | 'deepseek_r1' | 'always'
   context_window?: number | null
 }
 
@@ -297,6 +299,11 @@ const selectedModelCapabilities = computed(() => {
 const selectedModelContextWindow = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.context_window ?? null
 })
+const selectedModelReasoningMode = computed(() => {
+  return models.value.find((model) => model.key === selectedModel.value)?.reasoning_mode ?? 'none'
+})
+const selectedModelSupportsThinking = computed(() => selectedModelReasoningMode.value === 'deepseek_v4')
+const activeThinkingEnabled = computed(() => selectedModelSupportsThinking.value && thinkingEnabled.value)
 const selectedTemplateName = computed(() => {
   const activeConversation = conversations.value.find((item) => item.id === conversationId.value)
   if (conversationId.value) return activeConversation?.promptTemplateName ?? '默认提示词'
@@ -386,6 +393,7 @@ const login = () => {
 }
 
 const SSO_LOGOUT_URL = 'http://sso.sitp.ac.cn/uias/logout'
+const LOCAL_LOGIN_URL = '/app'
 
 const devLogin = async (user = 'DEV001') => {
   const response = await fetch(`/api/auth/dev-login?user=${encodeURIComponent(user)}`, { method: 'POST' })
@@ -409,7 +417,15 @@ const logout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' })
   } finally {
     currentUser.value = null
-    window.location.replace(SSO_LOGOUT_URL)
+    const popup = window.open(SSO_LOGOUT_URL, 'sitp-sso-logout', 'popup,width=420,height=320')
+    window.setTimeout(() => {
+      try {
+        popup?.close()
+      } catch {
+        // Ignore cross-origin popup restrictions; the logout request has already been issued.
+      }
+      window.location.replace(LOCAL_LOGIN_URL)
+    }, 900)
   }
 }
 
@@ -457,6 +473,11 @@ const resizeComposer = () => {
   textarea.style.overflowY = textarea.scrollHeight > 180 ? 'auto' : 'hidden'
 }
 
+const focusComposer = async () => {
+  await nextTick()
+  promptInput.value?.focus()
+}
+
 const resizeMessageEditor = () => {
   const textarea = document.querySelector<HTMLTextAreaElement>('.user-message-editor textarea')
   if (!textarea) return
@@ -471,6 +492,10 @@ watch(prompt, () => {
     resizeComposer()
     window.requestAnimationFrame(resizeComposer)
   })
+})
+
+watch(selectedModelReasoningMode, (mode) => {
+  if (mode === 'none') thinkingEnabled.value = false
 })
 
 const normalizeSpeechText = (value: string) => {
@@ -980,7 +1005,7 @@ const sendEditedMessage = async (message: ChatMessage, index: number) => {
     const response = await fetch(`/api/conversations/${currentConversationId}/messages/${message.id}/edit-and-regenerate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, model: selectedModel.value, thinkingEnabled: thinkingEnabled.value }),
+      body: JSON.stringify({ content, model: selectedModel.value, thinkingEnabled: activeThinkingEnabled.value }),
       signal: abortController.signal,
     })
     if (!response.ok) throw new Error(`编辑发送失败（${response.status}）`)
@@ -1196,7 +1221,12 @@ const sendPrompt = async (preset?: string) => {
   const sentAttachments = attachments.value.map((file) => ({ ...file }))
   const attachmentIds = sentAttachments.map((file) => file.id)
 
-  const userMessage: ChatMessage = { role: 'user', content: contentForModel, attachments: sentAttachments }
+  const userMessage: ChatMessage = {
+    role: 'user',
+    content,
+    attachments: sentAttachments,
+    quotedText: quotedSelection.value?.text,
+  }
   const assistantMessage: ChatMessage = {
     role: 'assistant', content: '', reasoningContent: '', reasoningExpanded: false, citations: [],
   }
@@ -1220,11 +1250,12 @@ const sendPrompt = async (preset?: string) => {
       body: JSON.stringify({
         conversationId: conversationId.value,
         model: selectedModel.value,
-        content: contentForModel,
+        content,
+        modelContent: contentForModel,
         templateId: isFirstMessage && selectedTemplateId.value ? selectedTemplateId.value : null,
         attachmentIds,
         knowledgeBaseIds: isFirstMessage ? selectedKnowledgeBaseIds.value : [],
-        thinkingEnabled: thinkingEnabled.value,
+        thinkingEnabled: activeThinkingEnabled.value,
       }),
       signal: abortController.signal,
     })
@@ -1251,12 +1282,16 @@ const sendPrompt = async (preset?: string) => {
     const current = conversations.value.find((conversation) => conversation.id === conversationId.value)
     if (current) await openConversation(current, followLatest.value)
     if (isFirstMessage) scheduleTitleRefresh()
-    await scrollToBottom()
+    await scrollToBottom(true)
+    await focusComposer()
   }
 }
 
 /** Cancels the browser request; the backend persists any partial assistant output. */
-const stopGeneration = () => abortController?.abort()
+const stopGeneration = () => {
+  abortController?.abort()
+  void focusComposer()
+}
 
 /** Resets only browser state; existing persisted conversations remain in history. */
 const newConversation = () => {
@@ -1276,7 +1311,7 @@ const newConversation = () => {
 const handleComposerKeydown = (event: KeyboardEvent) => {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
-    sendPrompt()
+    void sendPrompt()
   }
 }
 
@@ -1551,6 +1586,10 @@ onMounted(async () => {
                   </div>
                 </div>
                 <div v-else-if="message.content" class="user-message-text">
+                  <div v-if="message.quotedText" class="user-message-quote">
+                    <Quote :size="14" />
+                    <span>{{ message.quotedText }}</span>
+                  </div>
                   <p :class="{ collapsed: shouldCollapseUserMessage(message) && !isUserMessageExpanded(message, index) }">{{ message.content }}</p>
                   <button
                     v-if="shouldCollapseUserMessage(message)"
@@ -1698,7 +1737,7 @@ onMounted(async () => {
               </ElDropdown>
             </div>
             <div class="composer-actions">
-              <ElDropdown trigger="click" placement="top-end" @command="selectThinkingMode">
+              <ElDropdown v-if="selectedModelSupportsThinking" trigger="click" placement="top-end" @command="selectThinkingMode">
                 <button class="thinking-menu-trigger" :class="{ active: thinkingEnabled }" type="button" title="选择回答模式">
                   <span>{{ thinkingEnabled ? '深度思考' : '快速回答' }}</span><ChevronDown :size="13" />
                 </button>
@@ -1727,10 +1766,10 @@ onMounted(async () => {
               </div>
               <h2 id="announcement-title">{{ activeAnnouncement.title }}</h2>
             </div>
-            <button type="button" title="鍏抽棴鍏憡" @click="dismissAnnouncement"><X :size="18" /></button>
+            <button type="button" title="关闭公告" @click="dismissAnnouncement"><X :size="18" /></button>
           </header>
           <div v-if="!announcementHistoryOpen" class="announcement-content">
-            <b>鏇存柊鍐呭</b>
+            <b>更新内容</b>
             <small v-if="announcementDate(activeAnnouncement)">最新公告 · 发布于 {{ announcementDate(activeAnnouncement) }}</small>
             <p>{{ activeAnnouncement.body }}</p>
           </div>
@@ -1742,7 +1781,7 @@ onMounted(async () => {
               :class="{ active: item.id === activeAnnouncement.id }"
               @click="selectAnnouncement(item)"
             >
-              <em>{{ announcementVersion(item) }} 路 {{ announcementDate(item) }}</em>
+              <em>{{ announcementVersion(item) }} · {{ announcementDate(item) }}</em>
               <span>{{ announcementDate(item) }}</span>
               <strong>{{ item.title }}</strong>
               <p>{{ item.body }}</p>

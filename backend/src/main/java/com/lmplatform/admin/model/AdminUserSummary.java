@@ -6,6 +6,7 @@ import java.time.OffsetDateTime;
 public record AdminUserSummary(
         long id,
         String accountNumber,
+        String userNumber,
         String displayName,
         short status,
         boolean administrator,

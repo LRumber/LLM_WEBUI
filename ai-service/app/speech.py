@@ -30,9 +30,8 @@ class SpeechGateway:
         filename: str,
         media_type: str,
     ) -> str:
-        api_key = self._api_key_for(model)
         url = f"{str(model.base_url).rstrip('/')}/audio/transcriptions"
-        headers = {"Authorization": f"Bearer {api_key}"}
+        headers = self._headers_for(model)
         audio_content, audio_format = self._normalize_audio(content, filename, media_type)
         data = {
             "model": model.model_name,
@@ -148,11 +147,17 @@ class SpeechGateway:
                 cleaned = parts[2].strip()
         return cleaned
 
-    def _api_key_for(self, model: ModelEndpoint) -> str:
+    def _headers_for(self, model: ModelEndpoint) -> dict[str, str]:
+        api_key = self._api_key_for(model)
+        return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    def _api_key_for(self, model: ModelEndpoint) -> str | None:
         if model.api_key_env:
             configured = os.getenv(model.api_key_env)
             if configured:
                 return configured
         if model.api_key:
             return model.api_key.get_secret_value()
-        return "local-inference"
+        if model.engine.value in {"vllm", "sglang", "ollama", "llama.cpp"}:
+            return "local-inference"
+        return None

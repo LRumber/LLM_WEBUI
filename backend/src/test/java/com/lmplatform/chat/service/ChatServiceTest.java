@@ -78,7 +78,7 @@ class ChatServiceTest {
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         service.stream(1L, new ChatStreamRequest(
-                null, "deepseek-chat", "你好", templateId, List.of(), List.of(knowledgeBaseId), true
+                null, "deepseek-chat", "你好", null, templateId, List.of(), List.of(knowledgeBaseId), true
         ), output);
 
         String stream = output.toString(StandardCharsets.UTF_8);

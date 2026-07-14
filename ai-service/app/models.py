@@ -36,6 +36,16 @@ class ModelCategory(StrEnum):
     SPEECH = "speech"
 
 
+class ReasoningMode(StrEnum):
+    """How a model exposes chain-of-thought or reasoning controls."""
+
+    NONE = "none"
+    QWEN3 = "qwen3"
+    DEEPSEEK_V4 = "deepseek_v4"
+    DEEPSEEK_R1 = "deepseek_r1"
+    ALWAYS = "always"
+
+
 class ModelEndpoint(BaseModel):
     """Validated local registration for an OpenAI-compatible inference endpoint."""
     key: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]+$")
@@ -48,6 +58,7 @@ class ModelEndpoint(BaseModel):
     capabilities: set[ModelCapability]
     enabled: bool = True
     frontend_visible: bool = True
+    reasoning_mode: ReasoningMode = ReasoningMode.NONE
     context_window: int | None = Field(default=None, gt=0)
     max_concurrency: int = Field(default=4, ge=1, le=1024)
     api_key_env: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]*$")

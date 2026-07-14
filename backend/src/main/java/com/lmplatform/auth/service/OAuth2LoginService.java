@@ -58,17 +58,14 @@ public class OAuth2LoginService {
                 ? response.path("data") : response;
         long externalUserId = longValue(user, "userId", "id");
         String idNo = text(user, "idNo", "identityNo", "employeeId");
-        String account = firstNonBlank(
-                text(user, "accountNumber", "username", "account", "loginName"),
-                String.valueOf(externalUserId)
-        );
+        String account = firstNonBlank(text(user, "accountNumber"), String.valueOf(externalUserId));
         String displayName = firstNonBlank(
                 text(user, "userName", "displayName", "name", "realName"), account
         );
         short status = (short) intValue(user, 1, "userStatus", "isUsing", "status");
         return repository.upsert(
                 externalUserId, idNo, account, displayName,
-                text(user, "userNumber", "userNo", "employeeNumber"),
+                text(user, "userNumber"),
                 nullableLong(user, "tenantId"), nullableShort(user, "idType"),
                 text(user, "username"), text(user, "email"),
                 text(user, "tel", "telephone", "phone", "mobile"),

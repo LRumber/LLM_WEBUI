@@ -11,6 +11,7 @@
       "capabilities": ["chat"],
       "enabled": true,
       "frontend_visible": true,
+      "reasoning_mode": "qwen3",
       "context_window": 32768,
       "max_concurrency": 8
     },
@@ -25,6 +26,7 @@
       "capabilities": ["chat", "vision"],
       "enabled": true,
       "frontend_visible": false,
+      "reasoning_mode": "none",
       "context_window": 32768
     },
     {
@@ -38,6 +40,7 @@
       "capabilities": ["speech_to_text"],
       "enabled": true,
       "frontend_visible": false,
+      "reasoning_mode": "none",
       "context_window": 32768
     }
   ]

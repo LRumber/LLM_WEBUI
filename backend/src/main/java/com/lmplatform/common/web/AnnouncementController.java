@@ -19,14 +19,14 @@ public class AnnouncementController {
         this.repository = repository;
     }
 
-    @GetMapping("/current")
+    @GetMapping(value = "/current", produces = "application/json;charset=UTF-8")
     public ResponseEntity<PlatformAnnouncement> current() {
         return repository.current()
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
-    @GetMapping("/history")
+    @GetMapping(value = "/history", produces = "application/json;charset=UTF-8")
     public List<PlatformAnnouncement> history() {
         return repository.publishedHistory();
     }

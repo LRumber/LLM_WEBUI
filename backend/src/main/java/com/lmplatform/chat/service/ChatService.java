@@ -102,9 +102,13 @@ public class ChatService {
         List<KnowledgeSearchResult> citations = retrieveKnowledge(
                 conversationId, userId, request.content()
         );
+        String modelContent = request.modelContent() == null || request.modelContent().isBlank()
+                ? request.content()
+                : request.modelContent();
         streamAssistant(
                 userId, conversationId, assistantMessageId, request.model(), newConversation,
-                newConversation ? request.content() : null, request.thinkingEnabled(), citations, output
+                newConversation ? request.content() : null, request.thinkingEnabled(), citations,
+                modelContent, output
         );
     }
 
@@ -126,7 +130,7 @@ public class ChatService {
         List<KnowledgeSearchResult> citations = retrieveKnowledge(
                 conversationId, userId, repository.latestUserContent(conversationId)
         );
-        streamAssistant(userId, conversationId, replacementId, model, false, null, false, citations, output);
+        streamAssistant(userId, conversationId, replacementId, model, false, null, false, citations, null, output);
     }
 
     /** Edits a user turn, hides following stale messages, then streams a fresh answer. */
@@ -158,7 +162,7 @@ public class ChatService {
         List<KnowledgeSearchResult> citations = retrieveKnowledge(conversationId, userId, content);
         streamAssistant(
                 userId, conversationId, assistantMessageId, model, false,
-                null, thinkingEnabled, citations, output
+                null, thinkingEnabled, citations, null, output
         );
     }
 
@@ -172,6 +176,7 @@ public class ChatService {
             String firstPrompt,
             boolean thinkingEnabled,
             List<KnowledgeSearchResult> citations,
+            String currentTurnModelContent,
             OutputStream output
     ) throws IOException {
         writeEvent(output, Map.of(
@@ -193,7 +198,7 @@ public class ChatService {
         try {
             aiServiceClient.streamChat(
                     model,
-                    buildModelMessages(conversationId, citations),
+                    buildModelMessages(conversationId, citations, currentTurnModelContent),
                     thinkingEnabled,
                     event -> handleAiEvent(
                             event, output, assistantContent, reasoningContent,
@@ -256,12 +261,17 @@ public class ChatService {
 
     /** Builds text or OpenAI-compatible image content without exposing MinIO outside the core service. */
     private List<Map<String, ?>> buildModelMessages(
-            UUID conversationId, List<KnowledgeSearchResult> citations
+            UUID conversationId, List<KnowledgeSearchResult> citations, String currentTurnModelContent
     ) throws IOException {
         List<Map<String, ?>> result = new ArrayList<>();
+        int lastUserIndex = -1;
         for (ModelContextMessage message : repository.modelContextMessages(
                 conversationId, maxContextMessages
         )) {
+            int currentIndex = result.size();
+            if ("user".equals(message.role())) {
+                lastUserIndex = currentIndex;
+            }
             if (message.attachments().isEmpty()) {
                 result.add(Map.of("role", message.role(), "content", message.content()));
                 continue;
@@ -285,6 +295,9 @@ public class ChatService {
             }
             result.add(Map.of("role", message.role(), "content", parts));
         }
+        if (currentTurnModelContent != null && !currentTurnModelContent.isBlank() && lastUserIndex >= 0) {
+            result.set(lastUserIndex, replaceMessageContent(result.get(lastUserIndex), currentTurnModelContent));
+        }
         if (!citations.isEmpty()) {
             StringBuilder context = new StringBuilder("""
                     以下是经过权限校验的知识库检索结果。请优先依据这些内容回答；引用时使用 [1]、[2] 格式。如果材料不足，请明确说明未找到可靠依据。\n\n
@@ -306,6 +319,28 @@ public class ChatService {
             result.add(firstUser, Map.of("role", "system", "content", context.toString()));
         }
         return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, ?> replaceMessageContent(Map<String, ?> message, String content) {
+        Object existing = message.get("content");
+        if (!(existing instanceof List<?> parts)) {
+            return Map.of("role", message.get("role"), "content", content);
+        }
+        List<Map<String, ?>> replaced = new ArrayList<>();
+        boolean textReplaced = false;
+        for (Object part : parts) {
+            if (part instanceof Map<?, ?> map && "text".equals(String.valueOf(map.get("type"))) && !textReplaced) {
+                replaced.add(Map.of("type", "text", "text", content));
+                textReplaced = true;
+            } else if (part instanceof Map<?, ?> map) {
+                replaced.add((Map<String, ?>) map);
+            }
+        }
+        if (!textReplaced) {
+            replaced.add(0, Map.of("type", "text", "text", content));
+        }
+        return Map.of("role", message.get("role"), "content", replaced);
     }
 
     /** Retrieves from every immutable conversation binding and keeps the strongest unique chunks. */

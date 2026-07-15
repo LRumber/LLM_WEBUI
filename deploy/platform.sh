@@ -36,7 +36,7 @@ case "${1:-}" in
     ;;
   up-offline)
     require_files
-    "${COMPOSE[@]}" up -d --no-build --pull never
+    "${COMPOSE[@]}" up -d --force-recreate --no-build --pull never
     ;;
   down)
     "${COMPOSE[@]}" down

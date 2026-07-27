@@ -4,7 +4,7 @@ import DOMPurify from 'dompurify'
 import {
   ElDropdown, ElDropdownItem, ElDropdownMenu, ElOption, ElProgress, ElSelect, ElTag,
 } from 'element-plus'
-import { marked } from 'marked'
+import { marked, type Tokens } from 'marked'
 import AdminDashboard from './AdminDashboard.vue'
 import ApiPlatformPage from './ApiPlatformPage.vue'
 import KnowledgeBasePage from './KnowledgeBasePage.vue'
@@ -276,8 +276,103 @@ const ANNOUNCEMENT_SEEN_PREFIX = 'lm-platform-announcement-seen:'
 const USER_MESSAGE_COLLAPSE_LINES = 10
 const USER_MESSAGE_COLLAPSE_CHARS = 700
 
+const escapeHtml = (value: string) => value
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;')
+
+const normalizeCodeLanguage = (lang?: string) => {
+  const raw = (lang ?? '').trim().split(/\s+/)[0].toLowerCase()
+  if (!raw) return 'text'
+  const aliases: Record<string, string> = {
+    js: 'javascript',
+    jsx: 'javascript',
+    ts: 'typescript',
+    tsx: 'typescript',
+    py: 'python',
+    sh: 'bash',
+    shell: 'bash',
+    yml: 'yaml',
+    md: 'markdown',
+    ps1: 'powershell',
+  }
+  return aliases[raw] ?? raw
+}
+
+const languageLabel = (lang: string) => ({
+  bash: 'Bash',
+  css: 'CSS',
+  html: 'HTML',
+  java: 'Java',
+  javascript: 'JavaScript',
+  json: 'JSON',
+  markdown: 'Markdown',
+  powershell: 'PowerShell',
+  python: 'Python',
+  sql: 'SQL',
+  text: 'Text',
+  typescript: 'TypeScript',
+  vue: 'Vue',
+  xml: 'XML',
+  yaml: 'YAML',
+}[lang] ?? lang.toUpperCase())
+
+const commonKeywordSource = 'abstract|and|as|async|await|break|case|catch|class|const|continue|def|do|else|enum|except|export|extends|false|final|finally|for|from|function|if|implements|import|in|instanceof|interface|let|new|null|or|package|private|protected|public|return|static|super|switch|this|throw|throws|true|try|type|var|void|while|with|yield'
+
+const highlightGenericCode = (code: string) => {
+  const tokenPattern = new RegExp(
+    `(\\/\\/.*$|#.*$)|("(?:\\\\.|[^"])*"|'(?:\\\\.|[^'])*'|\`(?:\\\\.|[^\`])*\`)|\\b(${commonKeywordSource})\\b|(-?\\b\\d+(?:\\.\\d+)?\\b)`,
+    'gm',
+  )
+  let html = ''
+  let cursor = 0
+  for (const match of code.matchAll(tokenPattern)) {
+    const index = match.index ?? 0
+    html += escapeHtml(code.slice(cursor, index))
+    const token = match[0]
+    if (match[1]) html += `<span class="code-token comment">${escapeHtml(token)}</span>`
+    else if (match[2]) html += `<span class="code-token string">${escapeHtml(token)}</span>`
+    else if (match[3]) html += `<span class="code-token keyword">${escapeHtml(token)}</span>`
+    else html += `<span class="code-token number">${escapeHtml(token)}</span>`
+    cursor = index + token.length
+  }
+  html += escapeHtml(code.slice(cursor))
+  return html
+}
+
+const highlightCode = (code: string, lang: string) => {
+  let html = escapeHtml(code)
+  if (['json', 'yaml', 'yml'].includes(lang)) {
+    html = html
+      .replace(/(&quot;[^&]*?&quot;)(\s*:)/g, '<span class="code-token property">$1</span>$2')
+      .replace(/\b(true|false|null)\b/g, '<span class="code-token literal">$1</span>')
+      .replace(/(-?\b\d+(?:\.\d+)?\b)/g, '<span class="code-token number">$1</span>')
+    return html
+  }
+  if (['bash', 'shell', 'powershell'].includes(lang)) {
+    html = html
+      .replace(/(^|\n)(\s*#.*)/g, '$1<span class="code-token comment">$2</span>')
+      .replace(/\b(cd|chmod|curl|docker|echo|export|git|grep|mkdir|npm|python|sudo|tar|unzip)\b/g, '<span class="code-token keyword">$1</span>')
+      .replace(/(--?[a-zA-Z0-9][\w-]*)/g, '<span class="code-token property">$1</span>')
+    return html
+  }
+  return highlightGenericCode(code)
+}
+
 // Configure GitHub-flavored Markdown once; every rendered result is sanitized below.
-marked.setOptions({ gfm: true, breaks: true })
+marked.use({
+  gfm: true,
+  breaks: true,
+  renderer: {
+    code(token: Tokens.Code) {
+      const language = normalizeCodeLanguage(token.lang)
+      const highlighted = highlightCode(token.text, language)
+      return `<div class="code-block" data-code-language="${escapeHtml(language)}"><div class="code-block-header"><span>${escapeHtml(languageLabel(language))}</span><button type="button" class="code-copy-button" data-code-copy>复制</button></div><pre><code class="language-${escapeHtml(language)}">${highlighted}</code></pre></div>`
+    },
+  },
+})
 
 const selectedModelName = computed(() => {
   return models.value.find((model) => model.key === selectedModel.value)?.display_name ?? 'DeepSeek Chat'
@@ -431,7 +526,9 @@ const logout = async () => {
 
 /** Converts model Markdown to sanitized HTML safe for v-html rendering. */
 const renderMarkdown = (content: string) => {
-  return DOMPurify.sanitize(marked.parse(content) as string)
+  return DOMPurify.sanitize(marked.parse(content) as string, {
+    ADD_ATTR: ['data-code-copy', 'data-code-language'],
+  })
 }
 
 const messageDisplayKey = (message: ChatMessage, index: number) => message.id ?? `${message.role}-${index}`
@@ -461,6 +558,23 @@ const copyMessage = async (content: string, index: number) => {
   window.setTimeout(() => {
     if (copiedMessageIndex.value === index) copiedMessageIndex.value = null
   }, 1600)
+}
+
+const handleConversationClick = async (event: MouseEvent) => {
+  const target = event.target as HTMLElement | null
+  const button = target?.closest<HTMLButtonElement>('[data-code-copy]')
+  if (!button) return
+  const block = button.closest('.code-block')
+  const code = block?.querySelector('code')?.textContent ?? ''
+  if (!code) return
+  await navigator.clipboard.writeText(code)
+  const previousLabel = button.textContent ?? '复制'
+  button.textContent = '已复制'
+  button.classList.add('copied')
+  window.setTimeout(() => {
+    button.textContent = previousLabel
+    button.classList.remove('copied')
+  }, 1400)
 }
 
 /** Grows the composer until its maximum height, then lets the textarea scroll. */
@@ -1532,6 +1646,7 @@ onMounted(async () => {
         :class="{ 'has-messages': messages.length }"
         @scroll="handleConversationScroll"
         @mouseup="handleConversationSelection"
+        @click="handleConversationClick"
       >
         <!-- Empty-state suggestions are real prompts, not decorative cards. -->
         <div v-if="!messages.length" class="empty-state">

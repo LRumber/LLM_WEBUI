@@ -456,8 +456,20 @@ button:disabled { cursor: not-allowed; }
 .markdown-body blockquote { margin: 14px 0; padding: 2px 14px; color: #626262; border-left: 3px solid #b8b8b8; }
 .markdown-body a { color: #0b755a; text-decoration: underline; text-underline-offset: 2px; }
 .markdown-body code { padding: 2px 5px; color: #9f3f22; background: #f3f3f3; border-radius: 4px; font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; }
+.markdown-body .code-block { margin: 15px 0; overflow: hidden; background: #1f2428; border: 1px solid #30363d; border-radius: 8px; }
+.code-block-header { height: 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 11px 0 13px; color: #c9d1d9; background: #2b3137; border-bottom: 1px solid #30363d; font-size: 12px; font-weight: 600; }
+.code-copy-button { height: 24px; padding: 0 9px; color: #d7dee6; background: #3a424b; border: 1px solid #4a535d; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.code-copy-button:hover { color: #ffffff; background: #46515c; }
+.code-copy-button.copied { color: #d9fbe8; border-color: #2f8f5b; background: #1f6f49; }
+.markdown-body .code-block pre { margin: 0; overflow-x: auto; padding: 15px 16px; color: #e8e8e8; background: transparent; border: 0; border-radius: 0; line-height: 1.65; }
+.markdown-body .code-block pre code { display: block; min-width: max-content; padding: 0; color: inherit; background: transparent; border-radius: 0; white-space: pre; }
 .markdown-body pre { margin: 15px 0; overflow-x: auto; padding: 15px 16px; color: #e8e8e8; background: #242424; border: 1px solid #333333; border-radius: 8px; line-height: 1.6; }
 .markdown-body pre code { padding: 0; color: inherit; background: transparent; border-radius: 0; }
+.code-token.keyword { color: #ff7b72; }
+.code-token.string { color: #a5d6ff; }
+.code-token.number, .code-token.literal { color: #79c0ff; }
+.code-token.comment { color: #8b949e; font-style: italic; }
+.code-token.property { color: #d2a8ff; }
 .markdown-body table { width: 100%; margin: 15px 0; border-collapse: collapse; font-size: 13px; }
 .markdown-body th, .markdown-body td { padding: 8px 10px; border: 1px solid #dddddd; text-align: left; }
 .markdown-body th { background: #f6f6f6; font-weight: 650; }

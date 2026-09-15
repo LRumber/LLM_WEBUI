@@ -12,10 +12,9 @@ import com.lmplatform.chat.client.AiServiceClient;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -26,7 +25,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -73,21 +71,23 @@ public class OpenAiProxyController {
     })
     public ResponseEntity<?> chat(
             @RequestHeader(value = "Authorization", required = false) String authorization,
-            @RequestBody JsonNode request
-    ) {
+            @RequestBody JsonNode request,
+            HttpServletResponse response
+    ) throws IOException {
         ApiPrincipal principal = service.authenticate(authorization);
         service.ensureQuota(principal);
         String model = request.path("model").asText();
         service.ensureModelEnabled(model);
         if (request.path("stream").asBoolean(false)) {
-            StreamingResponseBody body = output -> streamChat(principal, model, request, output);
-            return ResponseEntity.ok()
-                    .contentType(MediaType.TEXT_EVENT_STREAM)
-                    .header("Cache-Control", "no-cache")
-                    .header("X-Accel-Buffering", "no")
-                    .body(body);
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
+            response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+            response.setHeader("Cache-Control", "no-cache");
+            response.setHeader("X-Accel-Buffering", "no");
+            streamChat(principal, model, request, response.getOutputStream());
+            return null;
         }
-        return ResponseEntity.ok(nonStreamingChat(principal, model, request));
+        return ResponseEntity.ok(rawChat(principal, model, request));
     }
 
     @PostMapping(value = "/embeddings", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -158,31 +158,22 @@ public class OpenAiProxyController {
         return ResponseEntity.ok(response);
     }
 
-    private ObjectNode nonStreamingChat(ApiPrincipal principal, String model, JsonNode request) {
-        StringBuilder content = new StringBuilder();
-        AtomicInteger promptTokens = new AtomicInteger();
-        AtomicInteger completionTokens = new AtomicInteger();
+    private String rawChat(ApiPrincipal principal, String model, JsonNode request) {
         long started = System.nanoTime();
         try {
-            aiServiceClient.streamChat(model, messages(request), false, event -> {
-                if ("delta".equals(event.path("type").asText())) {
-                    content.append(event.path("content").asText());
-                } else if ("usage".equals(event.path("type").asText())) {
-                    promptTokens.set(event.path("prompt_tokens").asInt());
-                    completionTokens.set(event.path("completion_tokens").asInt());
-                } else if ("error".equals(event.path("type").asText())) {
-                    throw new IOException(event.path("message").asText("Model call failed"));
-                }
-            });
+            String response = aiServiceClient.postJson("/v1/chat/completions", request);
+            JsonNode usage = objectMapper.readTree(response).path("usage");
             repository.recordUsage(
                     UUID.randomUUID(), principal, model, "chat/completions",
-                    promptTokens.get(), completionTokens.get(), "completed", null, elapsedMs(started)
+                    usage.path("prompt_tokens").asInt(0),
+                    usage.path("completion_tokens").asInt(0),
+                    "completed", null, elapsedMs(started)
             );
-            return chatCompletion(model, content.toString(), promptTokens.get(), completionTokens.get());
+            return response;
         } catch (IOException exception) {
             repository.recordUsage(
                     UUID.randomUUID(), principal, model, "chat/completions",
-                    promptTokens.get(), completionTokens.get(), "failed", "upstream_error", elapsedMs(started)
+                    0, 0, "failed", "upstream_error", elapsedMs(started)
             );
             throw new ApiGatewayException("upstream_error", exception.getMessage(), 502);
         }
@@ -194,25 +185,26 @@ public class OpenAiProxyController {
         AtomicInteger promptTokens = new AtomicInteger();
         AtomicInteger completionTokens = new AtomicInteger();
         long started = System.nanoTime();
-        String id = "chatcmpl-" + UUID.randomUUID();
         try {
-            aiServiceClient.streamChat(model, messages(request), false, event -> {
-                String type = event.path("type").asText();
-                if ("delta".equals(type)) {
-                    writeSse(output, chatChunk(id, model, event.path("content").asText(), false));
-                } else if ("usage".equals(type)) {
-                    promptTokens.set(event.path("prompt_tokens").asInt());
-                    completionTokens.set(event.path("completion_tokens").asInt());
-                } else if ("error".equals(type)) {
-                    throw new IOException(event.path("message").asText("Model call failed"));
+            aiServiceClient.streamJson("/v1/chat/completions", request, line -> {
+                try {
+                    captureUsage(line, promptTokens, completionTokens);
+                    output.write((line + "\n").getBytes(StandardCharsets.UTF_8));
+                    output.flush();
+                } catch (IOException exception) {
+                    throw new StreamRelayException(exception);
                 }
             });
-            writeSse(output, chatChunk(id, model, "", true));
-            output.write("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));
             repository.recordUsage(
                     UUID.randomUUID(), principal, model, "chat/completions",
                     promptTokens.get(), completionTokens.get(), "completed", null, elapsedMs(started)
             );
+        } catch (StreamRelayException exception) {
+            repository.recordUsage(
+                    UUID.randomUUID(), principal, model, "chat/completions",
+                    promptTokens.get(), completionTokens.get(), "failed", "client_disconnected", elapsedMs(started)
+            );
+            throw exception.ioException();
         } catch (IOException exception) {
             repository.recordUsage(
                     UUID.randomUUID(), principal, model, "chat/completions",
@@ -222,65 +214,39 @@ public class OpenAiProxyController {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private java.util.List<Map<String, ?>> messages(JsonNode request) {
-        return objectMapper.convertValue(request.path("messages"), java.util.List.class);
-    }
-
-    private ObjectNode chatCompletion(String model, String content, int promptTokens, int completionTokens) {
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("id", "chatcmpl-" + UUID.randomUUID());
-        response.put("object", "chat.completion");
-        response.put("created", Instant.now().getEpochSecond());
-        response.put("model", model);
-        ObjectNode message = objectMapper.createObjectNode();
-        message.put("role", "assistant");
-        message.put("content", content);
-        ObjectNode choice = objectMapper.createObjectNode();
-        choice.put("index", 0);
-        choice.set("message", message);
-        choice.put("finish_reason", "stop");
-        response.putArray("choices").add(choice);
-        response.set("usage", usage(promptTokens, completionTokens));
-        return response;
-    }
-
-    private ObjectNode chatChunk(String id, String model, String content, boolean done) {
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("id", id);
-        response.put("object", "chat.completion.chunk");
-        response.put("created", Instant.now().getEpochSecond());
-        response.put("model", model);
-        ObjectNode delta = objectMapper.createObjectNode();
-        if (!done) {
-            delta.put("content", content);
+    private void captureUsage(String line, AtomicInteger promptTokens, AtomicInteger completionTokens) {
+        if (!line.startsWith("data:")) {
+            return;
         }
-        ObjectNode choice = objectMapper.createObjectNode();
-        choice.put("index", 0);
-        choice.set("delta", delta);
-        if (done) {
-            choice.put("finish_reason", "stop");
-        } else {
-            choice.putNull("finish_reason");
+        String data = line.substring(5).strip();
+        if (data.isEmpty() || "[DONE]".equals(data)) {
+            return;
         }
-        response.putArray("choices").add(choice);
-        return response;
-    }
-
-    private ObjectNode usage(int promptTokens, int completionTokens) {
-        ObjectNode usage = objectMapper.createObjectNode();
-        usage.put("prompt_tokens", promptTokens);
-        usage.put("completion_tokens", completionTokens);
-        usage.put("total_tokens", promptTokens + completionTokens);
-        return usage;
-    }
-
-    private void writeSse(OutputStream output, ObjectNode node) throws IOException {
-        output.write(("data: " + objectMapper.writeValueAsString(node) + "\n\n").getBytes(StandardCharsets.UTF_8));
-        output.flush();
+        try {
+            JsonNode usage = objectMapper.readTree(data).path("usage");
+            if (!usage.isMissingNode() && !usage.isNull()) {
+                promptTokens.set(usage.path("prompt_tokens").asInt(0));
+                completionTokens.set(usage.path("completion_tokens").asInt(0));
+            }
+        } catch (IOException ignored) {
+            // Some providers send comments or non-JSON keepalive lines.
+        }
     }
 
     private int elapsedMs(long started) {
         return (int) ((System.nanoTime() - started) / 1_000_000);
+    }
+
+    private static class StreamRelayException extends RuntimeException {
+        private final IOException ioException;
+
+        StreamRelayException(IOException ioException) {
+            super(ioException);
+            this.ioException = ioException;
+        }
+
+        IOException ioException() {
+            return ioException;
+        }
     }
 }

@@ -5,6 +5,8 @@ import asyncio
 import os
 import time
 from collections.abc import AsyncIterator
+from copy import deepcopy
+from types import SimpleNamespace
 
 import httpx
 
@@ -121,6 +123,57 @@ class ChatGateway:
                         }
 
         yield {"type": "done"}
+
+    async def openai_completion(self, payload: dict, model: ModelEndpoint) -> tuple[int, str, str | None]:
+        """Forward a non-streaming OpenAI-compatible request while preserving optional fields."""
+        upstream_payload = self._openai_payload(payload, model)
+        upstream_payload["stream"] = False
+        url = f"{str(model.base_url).rstrip('/')}/chat/completions"
+        timeout = httpx.Timeout(self._settings.chat_timeout_seconds, connect=15.0)
+        headers = self._headers_for(model)
+        headers["Content-Type"] = "application/json"
+        async with httpx.AsyncClient(timeout=timeout, transport=self._transport) as client:
+            response = await client.post(url, headers=headers, json=upstream_payload)
+        return response.status_code, response.text, response.headers.get("content-type")
+
+    async def stream_openai_completion(
+        self,
+        payload: dict,
+        model: ModelEndpoint,
+    ) -> AsyncIterator[str]:
+        """Forward a streaming OpenAI-compatible request and relay SSE lines unchanged."""
+        semaphore = self._semaphore_for(model)
+        try:
+            await asyncio.wait_for(semaphore.acquire(), timeout=1.0)
+        except TimeoutError as exc:
+            raise ModelBusyError(f"Model concurrency limit reached: {model.key}") from exc
+
+        try:
+            upstream_payload = self._openai_payload(payload, model)
+            upstream_payload["stream"] = True
+            upstream_payload.setdefault("stream_options", {"include_usage": True})
+            url = f"{str(model.base_url).rstrip('/')}/chat/completions"
+            timeout = httpx.Timeout(self._settings.chat_timeout_seconds, connect=15.0)
+            headers = self._headers_for(model)
+            headers["Content-Type"] = "application/json"
+            async with httpx.AsyncClient(timeout=timeout, transport=self._transport) as client:
+                async with client.stream("POST", url, headers=headers, json=upstream_payload) as response:
+                    if response.status_code >= 400:
+                        detail = (await response.aread()).decode("utf-8", errors="replace")
+                        raise UpstreamChatError(f"Upstream returned {response.status_code}: {detail[:500]}")
+                    async for line in response.aiter_lines():
+                        yield line
+        finally:
+            semaphore.release()
+
+    def _openai_payload(self, payload: dict, model: ModelEndpoint) -> dict:
+        """Copy one external OpenAI request, replacing only platform-owned routing fields."""
+        upstream_payload = deepcopy(payload)
+        thinking_enabled = bool(upstream_payload.pop("thinking_enabled", False))
+        request = SimpleNamespace(thinking_enabled=thinking_enabled)
+        upstream_payload["model"] = self._upstream_model_name(request, model)
+        self._apply_reasoning_mode(upstream_payload, request, model)
+        return upstream_payload
 
     def _upstream_model_name(self, request: ChatRequest, model: ModelEndpoint) -> str:
         """Select the provider's reasoning variant without changing the frontend model entry."""

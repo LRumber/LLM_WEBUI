@@ -22,8 +22,10 @@ import com.lmplatform.knowledge.service.KnowledgeSearchService;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 
 /** Unit tests for the chat orchestration boundary without network or database dependencies. */
@@ -62,7 +64,7 @@ class ChatServiceTest {
         when(repository.appendMessage(conversationId, "assistant", "", "generating"))
                 .thenReturn(assistantMessageId);
         when(repository.modelContextMessages(conversationId, 40))
-                .thenReturn(List.of(new ModelContextMessage("user", "你好", List.of())));
+                .thenReturn(List.of(new ModelContextMessage(1, "user", "你好", List.of())));
 
         doAnswer(invocation -> {
             AiServiceClient.EventConsumer consumer = invocation.getArgument(3);
@@ -121,7 +123,7 @@ class ChatServiceTest {
         when(repository.appendMessage(conversationId, "assistant", "", "generating"))
                 .thenReturn(replacementId);
         when(repository.modelContextMessages(conversationId, 40))
-                .thenReturn(List.of(new ModelContextMessage("user", "你好", List.of())));
+                .thenReturn(List.of(new ModelContextMessage(1, "user", "你好", List.of())));
         doAnswer(invocation -> {
             AiServiceClient.EventConsumer consumer = invocation.getArgument(3);
             consumer.accept(objectMapper.readTree("{\"type\":\"delta\",\"content\":\"新回答\"}"));
@@ -167,7 +169,7 @@ class ChatServiceTest {
         ))
                 .thenReturn(assistantId);
         when(repository.modelContextMessages(conversationId, 40))
-                .thenReturn(List.of(new ModelContextMessage("user", "edited question", List.of())));
+                .thenReturn(List.of(new ModelContextMessage(1, "user", "edited question", List.of())));
         doAnswer(invocation -> {
             AiServiceClient.EventConsumer consumer = invocation.getArgument(3);
             consumer.accept(objectMapper.readTree("{\"type\":\"delta\",\"content\":\"new answer\"}"));
@@ -193,6 +195,63 @@ class ChatServiceTest {
         );
         verify(repository).finishAssistantMessage(
                 assistantId, "new answer", "completed", 0, 0, null, null, null
+        );
+    }
+
+    /** Confirms long conversations are summarized before sending while visible history remains untouched. */
+    @Test
+    void summarizesOlderContextWhenPromptWouldExceedModelWindow() throws Exception {
+        ConversationRepository repository = mock(ConversationRepository.class);
+        AiServiceClient client = mock(AiServiceClient.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        ChatService service = new ChatService(
+                repository, client, objectMapper, mock(TitleGenerationService.class),
+                new AiServiceProperties("http://localhost:8001", 150, "deepseek-chat", 40),
+                mock(ObjectStorageService.class), mock(KnowledgeBaseService.class), mock(KnowledgeSearchService.class)
+        );
+        UUID conversationId = UUID.randomUUID();
+        UUID assistantId = UUID.randomUUID();
+        when(repository.belongsToUser(conversationId, 1L)).thenReturn(true);
+        when(repository.appendMessage(conversationId, "user", "继续", "completed")).thenReturn(UUID.randomUUID());
+        when(repository.appendMessage(conversationId, "assistant", "", "generating")).thenReturn(assistantId);
+        when(client.getModel("deepseek-chat")).thenReturn(objectMapper.readTree("{\"context_window\":4096}"));
+        List<ModelContextMessage> context = new java.util.ArrayList<>();
+        for (int index = 1; index <= 18; index++) {
+            context.add(new ModelContextMessage(
+                    index, index % 2 == 0 ? "assistant" : "user",
+                    "第" + index + "条历史。" + "很长的背景资料。".repeat(160),
+                    List.of()
+            ));
+        }
+        context.add(new ModelContextMessage(19, "user", "继续", List.of()));
+        when(repository.modelContextMessagesAfter(conversationId, 0, 200)).thenReturn(context);
+        when(client.generateTitle(eq("deepseek-chat"), any())).thenReturn(
+                new com.lmplatform.chat.model.TitleGenerationResult("已压缩的早期上下文摘要", 120, 30)
+        );
+        doAnswer(invocation -> {
+            AiServiceClient.EventConsumer consumer = invocation.getArgument(3);
+            consumer.accept(objectMapper.readTree("{\"type\":\"delta\",\"content\":\"回答\"}"));
+            consumer.accept(objectMapper.readTree("{\"type\":\"done\"}"));
+            return null;
+        }).when(client).streamChat(eq("deepseek-chat"), any(), eq(false), any());
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        service.stream(1L, new ChatStreamRequest(
+                conversationId, "deepseek-chat", "继续", null, null, List.of(), List.of(), false
+        ), output);
+
+        verify(repository).saveContextSummary(conversationId, "已压缩的早期上下文摘要", 7);
+        String stream = output.toString(StandardCharsets.UTF_8);
+        assertThat(stream).contains("\"type\":\"context_compaction\"");
+        assertThat(stream).contains("正在压缩上下文，请稍等");
+        assertThat(stream).contains("上下文压缩完成，正在生成回复");
+        ArgumentCaptor<List<Map<String, ?>>> messages = ArgumentCaptor.forClass(List.class);
+        verify(client).streamChat(eq("deepseek-chat"), messages.capture(), eq(false), any());
+        assertThat(messages.getValue().stream()
+                .anyMatch(message -> String.valueOf(message.get("content")).contains("已压缩的早期上下文摘要")))
+                .isTrue();
+        verify(repository).finishAssistantMessage(
+                assistantId, "回答", "completed", 0, 0, null, null, null
         );
     }
 }

@@ -209,8 +209,13 @@ public class ConversationRepository {
 
     /** Loads bounded active context with private image object references for multimodal requests. */
     public List<ModelContextMessage> modelContextMessages(UUID conversationId, int limit) {
+        return modelContextMessagesAfter(conversationId, 0, limit);
+    }
+
+    /** Loads active context after the persisted summary boundary for automatic compaction. */
+    public List<ModelContextMessage> modelContextMessagesAfter(UUID conversationId, int afterSequence, int limit) {
         return jdbc.query("""
-                SELECT id, role, content FROM (
+                SELECT id, role, content, sequence_no FROM (
                     SELECT cm.id, cm.role,
                            cm.content || COALESCE((
                                SELECT string_agg(E'\n\n[附件: ' || fa.original_name || E']\n' ||
@@ -223,6 +228,7 @@ public class ConversationRepository {
                     FROM conversation_message cm
                     WHERE cm.conversation_id = ? AND cm.status = 'completed'
                       AND cm.superseded_at IS NULL AND cm.content <> ''
+                      AND cm.sequence_no > ?
                     ORDER BY cm.sequence_no DESC LIMIT ?
                 ) recent_messages ORDER BY sequence_no
                 """, (rs, rowNum) -> {
@@ -237,14 +243,47 @@ public class ConversationRepository {
                     attachmentRs.getString("asset_kind")
             ), messageId);
             return new ModelContextMessage(
-                    rs.getString("role"), rs.getString("content"), attachments
+                    rs.getInt("sequence_no"), rs.getString("role"), rs.getString("content"), attachments
             );
-        }, conversationId, limit);
+        }, conversationId, afterSequence, limit);
     }
 
     /** Preserves the legacy unbounded call for title generation and focused unit tests. */
     public List<Map<String, String>> modelMessages(UUID conversationId) {
         return modelMessages(conversationId, 100);
+    }
+
+    /** Returns the durable compacted context prefix for a long-running conversation. */
+    public ContextSummary contextSummary(UUID conversationId) {
+        return jdbc.query("""
+                SELECT context_summary, context_summary_until_sequence
+                FROM conversation WHERE id = ?
+                """, (rs, rowNum) -> new ContextSummary(
+                rs.getString("context_summary"),
+                rs.getInt("context_summary_until_sequence")
+        ), conversationId).stream().findFirst().orElse(null);
+    }
+
+    /** Advances the summary boundary after older active messages have been compacted. */
+    public void saveContextSummary(UUID conversationId, String summary, int untilSequence) {
+        jdbc.update("""
+                UPDATE conversation
+                SET context_summary = ?, context_summary_until_sequence = ?,
+                    context_summary_updated_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, summary, untilSequence, conversationId);
+    }
+
+    /** Clears stale summary state when visible history is rewound or replaced. */
+    public void clearContextSummary(UUID conversationId) {
+        jdbc.update("""
+                UPDATE conversation
+                SET context_summary = NULL, context_summary_until_sequence = 0,
+                    context_summary_updated_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, conversationId);
     }
 
     /** Links only ready or uploaded files owned by the same user to one newly persisted message. */
@@ -283,6 +322,7 @@ public class ConversationRepository {
                     updated_at = CURRENT_TIMESTAMP
                 WHERE conversation_id = ? AND sequence_no > ? AND superseded_at IS NULL
                 """, conversationId, sequence);
+        clearContextSummary(conversationId);
         jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
         return true;
     }
@@ -340,6 +380,7 @@ public class ConversationRepository {
                 UPDATE conversation_message SET edited_at = CURRENT_TIMESTAMP, active_version = TRUE,
                     updated_at = CURRENT_TIMESTAMP WHERE id = ?
                 """, replacementId);
+        clearContextSummary(conversationId);
         jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
         return new MessageVersion(groupId, nextVersionIndex, replacementId);
     }
@@ -375,6 +416,7 @@ public class ConversationRepository {
                 SET active_version = TRUE, superseded_at = NULL, updated_at = CURRENT_TIMESTAMP
                 WHERE conversation_id = ? AND version_group_id = ? AND version_index = ?
                 """, conversationId, current.groupId(), versionIndex);
+        clearContextSummary(conversationId);
         jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
         return true;
     }
@@ -446,6 +488,7 @@ public class ConversationRepository {
                     updated_at = CURRENT_TIMESTAMP
                 WHERE conversation_id = ? AND sequence_no >= ? AND superseded_at IS NULL
                 """, conversationId, sequence);
+        clearContextSummary(conversationId);
         jdbc.update("UPDATE conversation SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
         return true;
     }
@@ -802,6 +845,9 @@ public class ConversationRepository {
         public MessageVersion(UUID groupId, int versionIndex) {
             this(groupId, versionIndex, null);
         }
+    }
+
+    public record ContextSummary(String content, int untilSequence) {
     }
 
     private record VersionAnchor(int sequence, UUID groupId, Integer versionIndex) {

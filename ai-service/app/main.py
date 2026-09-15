@@ -4,8 +4,8 @@ import json
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response, StreamingResponse
 
 from app.chat import ChatConfigurationError, ChatGateway, ModelBusyError, UpstreamChatError
 from app.config import get_settings
@@ -153,6 +153,55 @@ def stream_chat(request: ChatRequest) -> StreamingResponse:
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(request: Request) -> Response:
+    """Proxy OpenAI-compatible Chat Completions while preserving client-supplied fields."""
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+    model_key = str(payload.get("model") or "")
+    model = registry.get(model_key)
+    if model is None or ModelCapability.CHAT not in model.capabilities:
+        raise HTTPException(status_code=404, detail="Chat model not found")
+
+    if bool(payload.get("stream", False)):
+        async def event_stream():
+            try:
+                async for line in chat_gateway.stream_openai_completion(payload, model):
+                    yield f"{line}\n"
+            except ChatConfigurationError as exc:
+                event = {"error": {"message": str(exc), "type": "configuration_error", "code": "configuration_error"}}
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except UpstreamChatError as exc:
+                event = {"error": {"message": str(exc), "type": "upstream_error", "code": "upstream_error"}}
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except ModelBusyError as exc:
+                event = {"error": {"message": str(exc), "type": "model_busy", "code": "model_busy"}}
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except Exception:
+                event = {"error": {"message": "Chat service failed", "type": "internal_error", "code": "internal_error"}}
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    try:
+        status, body, content_type = await chat_gateway.openai_completion(payload, model)
+    except ChatConfigurationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Chat service failed: {str(exc)[:300]}") from exc
+    return Response(
+        content=body,
+        status_code=status,
+        media_type=(content_type or "application/json").split(";")[0],
     )
 
 

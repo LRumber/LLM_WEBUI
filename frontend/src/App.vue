@@ -54,6 +54,7 @@ interface ChatMessage {
   id?: string
   role: Role
   content: string
+  statusText?: string
   error?: boolean
   editedAt?: string | null
   versionIndex?: number | null
@@ -107,7 +108,8 @@ interface ModelInfo {
 
 /** Normalized event emitted by Spring Boot while forwarding an AI response. */
 interface StreamEvent {
-  type: 'metadata' | 'edit_metadata' | 'citations' | 'reasoning_delta' | 'reasoning_done' | 'delta' | 'usage' | 'done' | 'error'
+  type: 'metadata' | 'edit_metadata' | 'citations' | 'context_compaction' | 'reasoning_delta' | 'reasoning_done' | 'delta' | 'usage' | 'done' | 'error'
+  status?: string
   content?: string
   message?: string
   conversation_id?: string
@@ -1276,12 +1278,17 @@ const applyStreamEvent = (event: StreamEvent, assistantIndex: number) => {
     }
   } else if (event.type === 'citations') {
     assistant.citations = event.citations ?? []
+  } else if (event.type === 'context_compaction') {
+    assistant.statusText = event.message || (event.status === 'started' ? '正在压缩上下文，请稍等' : '上下文压缩完成，正在生成回复')
+    scrollToBottom()
   } else if (event.type === 'reasoning_delta' && event.content) {
+    assistant.statusText = undefined
     assistant.reasoningContent = (assistant.reasoningContent ?? '') + event.content
     scrollToBottom()
   } else if (event.type === 'reasoning_done') {
     assistant.reasoningDurationMs = event.duration_ms ?? null
   } else if (event.type === 'delta' && event.content) {
+    assistant.statusText = undefined
     assistant.content += event.content
     scrollToBottom()
   } else if (event.type === 'usage') {
@@ -1291,6 +1298,7 @@ const applyStreamEvent = (event: StreamEvent, assistantIndex: number) => {
       total: event.total_tokens ?? 0,
     }
   } else if (event.type === 'error') {
+    assistant.statusText = undefined
     assistant.error = true
     assistant.content = event.message || '请求模型失败，请稍后重试。'
   }
@@ -1715,7 +1723,10 @@ onMounted(async () => {
                     {{ isUserMessageExpanded(message, index) ? '收起' : '展开全部' }}
                   </button>
                 </div>
-                <div v-else class="typing-indicator" aria-label="模型正在生成"><i></i><i></i><i></i></div>
+                <div v-else class="typing-state" :aria-label="message.statusText || '模型正在生成'">
+                  <span v-if="message.statusText">{{ message.statusText }}</span>
+                  <span class="typing-indicator"><i></i><i></i><i></i></span>
+                </div>
                 <details v-if="message.role === 'assistant' && message.citations?.length" class="message-citations">
                   <summary><Library :size="14" />引用来源（{{ message.citations.length }}）</summary>
                   <button v-for="(citation, citationIndex) in message.citations" :key="citation.chunkId || citationIndex" type="button" @click="downloadCitation(citation)">

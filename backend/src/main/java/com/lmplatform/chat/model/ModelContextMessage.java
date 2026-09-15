@@ -4,6 +4,7 @@ import java.util.List;
 
 /** Active conversation message plus attachments needed for OpenAI multimodal content parts. */
 public record ModelContextMessage(
+        int sequenceNo,
         String role,
         String content,
         List<ModelMessageAttachment> attachments

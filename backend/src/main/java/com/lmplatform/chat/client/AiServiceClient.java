@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.ArrayList;
+import java.util.function.Consumer;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.core.io.ByteArrayResource;
@@ -100,6 +101,31 @@ public class AiServiceClient {
                 .body(body)
                 .retrieve()
                 .body(String.class);
+    }
+
+    /** Relays an OpenAI-compatible streaming JSON request and exposes every SSE line unchanged. */
+    public void streamJson(String uri, JsonNode body, Consumer<String> lineConsumer) throws IOException {
+        restClient.post()
+                .uri(uri)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .body(body)
+                .exchange((request, response) -> {
+                    if (response.getStatusCode().isError()) {
+                        String detail = new String(response.getBody().readAllBytes(), StandardCharsets.UTF_8);
+                        throw new IOException(
+                                "AI service returned " + response.getStatusCode().value() + ": " + detail
+                        );
+                    }
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            lineConsumer.accept(line);
+                        }
+                    }
+                    return null;
+                });
     }
 
     /** Returns one registered model so proxy endpoints can expose OpenAI-compatible metadata. */

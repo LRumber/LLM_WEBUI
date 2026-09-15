@@ -28,6 +28,10 @@ import org.springframework.stereotype.Service;
 @Service
 public class ChatService {
 
+    private static final int COMPACTION_FETCH_LIMIT = 200;
+    private static final int RECENT_MESSAGES_AFTER_SUMMARY = 12;
+    private static final int SUMMARY_SOURCE_MAX_CHARS = 48_000;
+
     private final ConversationRepository repository;
     private final AiServiceClient aiServiceClient;
     private final ObjectMapper objectMapper;
@@ -198,7 +202,7 @@ public class ChatService {
         try {
             aiServiceClient.streamChat(
                     model,
-                    buildModelMessages(conversationId, citations, currentTurnModelContent),
+                    buildModelMessages(conversationId, model, citations, currentTurnModelContent, output),
                     thinkingEnabled,
                     event -> handleAiEvent(
                             event, output, assistantContent, reasoningContent,
@@ -261,13 +265,53 @@ public class ChatService {
 
     /** Builds text or OpenAI-compatible image content without exposing MinIO outside the core service. */
     private List<Map<String, ?>> buildModelMessages(
-            UUID conversationId, List<KnowledgeSearchResult> citations, String currentTurnModelContent
+            UUID conversationId,
+            String model,
+            List<KnowledgeSearchResult> citations,
+            String currentTurnModelContent,
+            OutputStream output
+    ) throws IOException {
+        ConversationRepository.ContextSummary summary = repository.contextSummary(conversationId);
+        int summarizedUntil = summary == null ? 0 : summary.untilSequence();
+        String summaryText = summary == null ? "" : nullToEmpty(summary.content()).strip();
+        List<ModelContextMessage> contextMessages = repository.modelContextMessagesAfter(
+                conversationId, summarizedUntil, COMPACTION_FETCH_LIMIT
+        );
+        if (contextMessages == null) {
+            contextMessages = repository.modelContextMessages(conversationId, maxContextMessages);
+        }
+        List<Map<String, ?>> result = renderModelMessages(contextMessages, currentTurnModelContent, summaryText);
+        result = insertKnowledgeContext(result, citations);
+
+        Integer contextWindow = modelContextWindow(model);
+        if (contextWindow == null || withinBudget(result, contextWindow)) {
+            return result;
+        }
+
+        writeEvent(output, Map.of(
+                "type", "context_compaction",
+                "status", "started",
+                "message", "正在压缩上下文，请稍等"
+        ));
+        CompactedContext compacted = compactContext(
+                conversationId, model, summaryText, contextMessages, currentTurnModelContent, contextWindow
+        );
+        writeEvent(output, Map.of(
+                "type", "context_compaction",
+                "status", "completed",
+                "message", "上下文压缩完成，正在生成回复"
+        ));
+        result = renderModelMessages(compacted.messages(), currentTurnModelContent, compacted.summary());
+        result = insertKnowledgeContext(result, citations);
+        return trimToBudget(result, contextWindow);
+    }
+
+    private List<Map<String, ?>> renderModelMessages(
+            List<ModelContextMessage> messages, String currentTurnModelContent, String summary
     ) throws IOException {
         List<Map<String, ?>> result = new ArrayList<>();
         int lastUserIndex = -1;
-        for (ModelContextMessage message : repository.modelContextMessages(
-                conversationId, maxContextMessages
-        )) {
+        for (ModelContextMessage message : messages) {
             int currentIndex = result.size();
             if ("user".equals(message.role())) {
                 lastUserIndex = currentIndex;
@@ -298,6 +342,19 @@ public class ChatService {
         if (currentTurnModelContent != null && !currentTurnModelContent.isBlank() && lastUserIndex >= 0) {
             result.set(lastUserIndex, replaceMessageContent(result.get(lastUserIndex), currentTurnModelContent));
         }
+        if (summary != null && !summary.isBlank()) {
+            result.add(firstNonSystemIndex(result), Map.of(
+                    "role", "system",
+                    "content", "以下是本轮对话较早内容的压缩摘要，请作为上下文参考，不要向用户说明存在该摘要。\n\n" + summary
+            ));
+        }
+        return result;
+    }
+
+    private List<Map<String, ?>> insertKnowledgeContext(
+            List<Map<String, ?>> messages, List<KnowledgeSearchResult> citations
+    ) {
+        List<Map<String, ?>> result = new ArrayList<>(messages);
         if (!citations.isEmpty()) {
             StringBuilder context = new StringBuilder("""
                     以下是经过权限校验的知识库检索结果。请优先依据这些内容回答；引用时使用 [1]、[2] 格式。如果材料不足，请明确说明未找到可靠依据。\n\n
@@ -311,14 +368,190 @@ public class ChatService {
                 }
                 context.append('\n').append(citation.content()).append("\n\n");
             }
-            int firstUser = 0;
-            while (firstUser < result.size()
-                    && !"user".equals(String.valueOf(result.get(firstUser).get("role")))) {
-                firstUser++;
-            }
-            result.add(firstUser, Map.of("role", "system", "content", context.toString()));
+            result.add(firstNonSystemIndex(result), Map.of("role", "system", "content", context.toString()));
         }
         return result;
+    }
+
+    private CompactedContext compactContext(
+            UUID conversationId,
+            String model,
+            String existingSummary,
+            List<ModelContextMessage> contextMessages,
+            String currentTurnModelContent,
+            int contextWindow
+    ) {
+        List<ModelContextMessage> dialogue = contextMessages.stream()
+                .filter(message -> !"system".equals(message.role()))
+                .toList();
+        if (dialogue.size() <= RECENT_MESSAGES_AFTER_SUMMARY) {
+            return new CompactedContext(existingSummary, keepRecentWithSystemMessages(contextMessages, 8));
+        }
+        int splitIndex = Math.max(1, dialogue.size() - RECENT_MESSAGES_AFTER_SUMMARY);
+        List<ModelContextMessage> older = dialogue.subList(0, splitIndex);
+        List<ModelContextMessage> recentDialogue = dialogue.subList(splitIndex, dialogue.size());
+        int untilSequence = older.getLast().sequenceNo();
+        String nextSummary = summarizeOlderContext(model, existingSummary, older, contextWindow);
+        if (nextSummary.isBlank()) {
+            return new CompactedContext(existingSummary, mergeSystemAndRecent(contextMessages, recentDialogue));
+        }
+        repository.saveContextSummary(conversationId, nextSummary, untilSequence);
+        return new CompactedContext(nextSummary, mergeSystemAndRecent(contextMessages, recentDialogue));
+    }
+
+    private String summarizeOlderContext(
+            String model, String existingSummary, List<ModelContextMessage> older, int contextWindow
+    ) {
+        String source = boundedSummarySource(existingSummary, older, contextWindow);
+        if (source.isBlank()) {
+            return existingSummary;
+        }
+        List<Map<String, String>> messages = List.of(
+                Map.of(
+                        "role", "system",
+                        "content", """
+                                你负责为企业智能工作台压缩长对话上下文。请保留用户目标、关键事实、已确认结论、待办事项、约束条件、重要代码/配置名和未解决问题。\
+                                删除寒暄和重复内容。输出一段结构清晰的中文摘要，不要编造不存在的信息。
+                                """
+                ),
+                Map.of(
+                        "role", "user",
+                        "content", "请将以下历史对话压缩为后续回答可用的上下文摘要：\n\n" + source
+                )
+        );
+        try {
+            return aiServiceClient.generateTitle(model, messages).title().strip();
+        } catch (IOException | RuntimeException exception) {
+            return existingSummary;
+        }
+    }
+
+    private String boundedSummarySource(
+            String existingSummary, List<ModelContextMessage> older, int contextWindow
+    ) {
+        int maxChars = Math.min(SUMMARY_SOURCE_MAX_CHARS, Math.max(4_000, contextWindow));
+        StringBuilder source = new StringBuilder();
+        if (existingSummary != null && !existingSummary.isBlank()) {
+            source.append("【已有摘要】\n").append(existingSummary.strip()).append("\n\n");
+        }
+        source.append("【新增历史消息】\n");
+        for (ModelContextMessage message : older) {
+            source.append(roleLabel(message.role())).append(": ")
+                    .append(message.content().strip()).append('\n');
+            if (!message.attachments().isEmpty()) {
+                source.append("[图片附件已省略，仅保留文字上下文]\n");
+            }
+            source.append('\n');
+            if (source.length() >= maxChars) {
+                return source.substring(source.length() - maxChars);
+            }
+        }
+        return source.toString();
+    }
+
+    private List<ModelContextMessage> keepRecentWithSystemMessages(
+            List<ModelContextMessage> messages, int recentDialogueLimit
+    ) {
+        List<ModelContextMessage> dialogue = messages.stream()
+                .filter(message -> !"system".equals(message.role()))
+                .toList();
+        int start = Math.max(0, dialogue.size() - recentDialogueLimit);
+        return mergeSystemAndRecent(messages, dialogue.subList(start, dialogue.size()));
+    }
+
+    private List<ModelContextMessage> mergeSystemAndRecent(
+            List<ModelContextMessage> messages, List<ModelContextMessage> recentDialogue
+    ) {
+        List<ModelContextMessage> merged = new ArrayList<>();
+        messages.stream()
+                .filter(message -> "system".equals(message.role()))
+                .forEach(merged::add);
+        merged.addAll(recentDialogue);
+        merged.sort(java.util.Comparator.comparingInt(ModelContextMessage::sequenceNo));
+        return merged;
+    }
+
+    private List<Map<String, ?>> trimToBudget(List<Map<String, ?>> messages, int contextWindow) {
+        List<Map<String, ?>> trimmed = new ArrayList<>(messages);
+        while (!withinBudget(trimmed, contextWindow)) {
+            int removeIndex = firstRemovableMessageIndex(trimmed);
+            if (removeIndex < 0) {
+                break;
+            }
+            trimmed.remove(removeIndex);
+        }
+        return trimmed;
+    }
+
+    private int firstRemovableMessageIndex(List<Map<String, ?>> messages) {
+        for (int index = 0; index < messages.size() - 2; index++) {
+            if (!"system".equals(String.valueOf(messages.get(index).get("role")))) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private boolean withinBudget(List<Map<String, ?>> messages, int contextWindow) {
+        int usablePromptTokens = Math.max(1, (int) (contextWindow * 0.8) - 512);
+        return estimateTokens(messages) <= usablePromptTokens;
+    }
+
+    private int estimateTokens(List<Map<String, ?>> messages) {
+        int total = 0;
+        for (Map<String, ?> message : messages) {
+            total += 4;
+            Object content = message.get("content");
+            if (content instanceof String text) {
+                total += estimateTextTokens(text);
+            } else if (content instanceof List<?> parts) {
+                for (Object part : parts) {
+                    if (part instanceof Map<?, ?> map && "text".equals(String.valueOf(map.get("type")))) {
+                        total += estimateTextTokens(String.valueOf(map.get("text")));
+                    } else if (part instanceof Map<?, ?> map && "image_url".equals(String.valueOf(map.get("type")))) {
+                        total += 1024;
+                    }
+                }
+            }
+        }
+        return total + 16;
+    }
+
+    private int estimateTextTokens(String text) {
+        return Math.max(1, (nullToEmpty(text).length() + 1) / 2);
+    }
+
+    private Integer modelContextWindow(String model) {
+        try {
+            JsonNode modelInfo = aiServiceClient.getModel(model);
+            if (modelInfo != null && modelInfo.path("context_window").isNumber()) {
+                return modelInfo.path("context_window").asInt();
+            }
+        } catch (RuntimeException ignored) {
+            // Missing metadata should not block chat; the AI service still enforces its own model limit.
+        }
+        return null;
+    }
+
+    private int firstNonSystemIndex(List<Map<String, ?>> messages) {
+        int index = 0;
+        while (index < messages.size()
+                && "system".equals(String.valueOf(messages.get(index).get("role")))) {
+            index++;
+        }
+        return index;
+    }
+
+    private String roleLabel(String role) {
+        return switch (role) {
+            case "system" -> "系统";
+            case "assistant" -> "助手";
+            default -> "用户";
+        };
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     @SuppressWarnings("unchecked")
@@ -432,5 +665,8 @@ public class ChatService {
     private String safeMessage(Exception exception) {
         String message = exception.getMessage();
         return message == null || message.isBlank() ? "Chat service failed" : message;
+    }
+
+    private record CompactedContext(String summary, List<ModelContextMessage> messages) {
     }
 }

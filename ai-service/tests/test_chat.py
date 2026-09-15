@@ -158,3 +158,91 @@ async def test_chat_health_allows_openai_compatible_endpoint_without_api_key():
     result = await gateway.health(model)
 
     assert result["status"] == "UP"
+
+
+@pytest.mark.asyncio
+async def test_openai_completion_preserves_optional_fields():
+    """External API proxy should keep OpenAI Chat Completions fields for Dify/tool callers."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["model"] == "Qwen3-Coder-30B-A3B-Instruct"
+        assert payload["tools"] == [{"type": "function", "function": {"name": "lookup"}}]
+        assert payload["tool_choice"] == "auto"
+        assert payload["response_format"] == {"type": "json_object"}
+        assert payload["stop"] == ["END"]
+        assert payload["top_p"] == 0.9
+        assert payload["stream"] is False
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    gateway = ChatGateway(Settings(), transport=httpx.MockTransport(handler))
+    model = ModelEndpoint(
+        key="qwen3-coder",
+        display_name="Qwen3 Coder",
+        provider="openai-compatible",
+        base_url="http://qwen.local/v1",
+        model_name="Qwen3-Coder-30B-A3B-Instruct",
+        capabilities={ModelCapability.CHAT},
+    )
+    payload = {
+        "model": "qwen3-coder",
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        "tool_choice": "auto",
+        "response_format": {"type": "json_object"},
+        "stop": ["END"],
+        "top_p": 0.9,
+    }
+
+    status, body, _ = await gateway.openai_completion(payload, model)
+
+    assert status == 200
+    assert json.loads(body)["usage"]["total_tokens"] == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_openai_completion_preserves_tool_role_messages():
+    """Streaming proxy should not reject OpenAI tool-role messages."""
+    upstream_events = [
+        {"choices": [{"delta": {"content": "ok"}}]},
+        {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}},
+    ]
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in upstream_events) + "data: [DONE]\n\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["messages"][1]["role"] == "tool"
+        assert payload["stream"] is True
+        assert payload["stream_options"] == {"include_usage": True}
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    gateway = ChatGateway(Settings(), transport=httpx.MockTransport(handler))
+    model = ModelEndpoint(
+        key="tool-chat",
+        display_name="Tool Chat",
+        provider="openai-compatible",
+        base_url="http://tool.local/v1",
+        model_name="tool-chat",
+        capabilities={ModelCapability.CHAT},
+    )
+    payload = {
+        "model": "tool-chat",
+        "messages": [
+            {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function"}], "content": None},
+            {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        ],
+        "stream": True,
+    }
+
+    lines = [line async for line in gateway.stream_openai_completion(payload, model) if line]
+
+    assert "data:" in lines[0]
+    assert lines[-1] == "data: [DONE]"

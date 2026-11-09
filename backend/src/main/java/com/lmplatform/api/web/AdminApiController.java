@@ -9,6 +9,15 @@ import com.lmplatform.api.model.ApiQuotaUpdateRequest;
 import com.lmplatform.api.repository.ApiGatewayRepository;
 import com.lmplatform.api.service.ApiGatewayService;
 import jakarta.validation.Valid;
+import jakarta.servlet.http.HttpSession;
+import com.lmplatform.admin.web.AdminSession;
+import com.lmplatform.admin.model.AdminPrincipal;
+import com.lmplatform.api.repository.ApiCreditRepository;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+import java.util.Map;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +25,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -27,10 +37,12 @@ public class AdminApiController {
 
     private final ApiGatewayService service;
     private final ApiGatewayRepository repository;
+    private final ApiCreditRepository credits;
 
-    public AdminApiController(ApiGatewayService service, ApiGatewayRepository repository) {
+    public AdminApiController(ApiGatewayService service, ApiGatewayRepository repository, ApiCreditRepository credits) {
         this.service = service;
         this.repository = repository;
+        this.credits = credits;
     }
 
     @GetMapping("/overview")
@@ -67,9 +79,24 @@ public class AdminApiController {
             @PathVariable long userId,
             @Valid @RequestBody ApiQuotaUpdateRequest request
     ) {
-        repository.setQuota(userId, request.totalQuota());
+        return ResponseEntity.status(410).build();
+    }
+
+    @PostMapping("/users/{userId}/credits")
+    public ResponseEntity<Void> adjustCredits(@PathVariable long userId,
+            @Valid @RequestBody CreditRequest request, HttpSession session) {
+        var admin = (AdminPrincipal) session.getAttribute(AdminSession.PRINCIPAL_KEY);
+        credits.adjust(userId, request.operationId(), request.operation(), request.amount(), request.note() == null ? "" : request.note(),
+                admin.source() + ":" + admin.id() + ":" + admin.displayName());
         return ResponseEntity.noContent().build();
     }
+
+    @GetMapping("/users/{userId}/credits")
+    public List<Map<String, Object>> creditHistory(@PathVariable long userId) {
+        return credits.history(userId);
+    }
+
+    public record CreditRequest(@NotNull UUID operationId, @NotBlank String operation, @Min(0) long amount, @Size(max = 500) String note) {}
 
     @GetMapping("/keys")
     public List<AdminApiKeySummary> keys() {

@@ -1,0 +1,2 @@
+ALTER TABLE api_user_quota
+    ADD COLUMN unlimited BOOLEAN NOT NULL DEFAULT FALSE;

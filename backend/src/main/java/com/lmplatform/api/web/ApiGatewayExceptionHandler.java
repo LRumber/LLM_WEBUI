@@ -6,7 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice(assignableTypes = OpenAiProxyController.class)
+@RestControllerAdvice(assignableTypes = {OpenAiProxyController.class, AdminApiController.class})
 public class ApiGatewayExceptionHandler {
 
     @ExceptionHandler(ApiGatewayException.class)

@@ -42,6 +42,9 @@ interface AdminUser {
   conversationCount: number
   totalTokens: number
   apiTotalQuota: number
+  apiAvailableTokens: number
+  apiReservedTokens: number
+  apiQuotaUnlimited: boolean
   apiUsedTokens: number
   apiRequestCount: number
   apiKeyCount: number
@@ -178,6 +181,14 @@ const announcementMessage = ref('')
 const announcementForm = ref({ id: '', version: '', title: '', body: '', published: true })
 const announcementEditorOpen = ref(false)
 const announcementDetail = ref<PlatformAnnouncement | null>(null)
+const quotaEditorUser = ref<AdminUser | null>(null)
+const quotaAmount = ref(10_000_000)
+const quotaOperation = ref<'add' | 'deduct' | 'unlimited' | 'limited'>('add')
+const quotaNote = ref('')
+const quotaOperationId = ref('')
+const quotaHistory = ref<Array<{id: number; actor: string; operation: string; amount: number; note: string; created_at: string}>>([])
+const quotaSaving = ref(false)
+const quotaSaveError = ref('')
 const modelForm = ref<ModelRegistration>({
   key: '', display_name: '', provider: 'openai-compatible', engine: 'openai-compatible', category: 'language', base_url: '', model_name: '',
   capabilities: ['chat'], enabled: true, frontend_visible: true, reasoning_mode: 'none', context_window: 32768, api_key: '',
@@ -715,17 +726,57 @@ const changeUserPage = async (page: number) => {
   }
 }
 
-const setApiQuota = async (user: AdminUser) => {
-  const value = window.prompt(`设置 ${user.displayName} 的 API 总 Token 额度`, String(user.apiTotalQuota))
-  if (value === null) return
-  const totalQuota = Number(value)
-  if (!Number.isFinite(totalQuota) || totalQuota < 0) return window.alert('请输入不小于 0 的数字')
-  const response = await fetch(`/api/admin/api/users/${user.id}/quota`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ totalQuota: Math.floor(totalQuota) }),
-  })
-  if (response.ok) await loadCurrentPage()
+const openApiQuotaEditor = async (user: AdminUser) => {
+  quotaEditorUser.value = user
+  quotaAmount.value = 10_000_000
+  quotaOperation.value = 'add'
+  quotaNote.value = ''
+  quotaOperationId.value = crypto.randomUUID()
+  quotaHistory.value = []
+  quotaSaveError.value = ''
+  try {
+    const response = await fetch(`/api/admin/api/users/${user.id}/credits`)
+    if (!response.ok) throw new Error()
+    const history = await response.json()
+    if (quotaEditorUser.value?.id === user.id) quotaHistory.value = history
+  } catch {
+    if (quotaEditorUser.value?.id === user.id) quotaSaveError.value = '调整记录加载失败，请重新打开'
+  }
+}
+
+const saveApiQuota = async () => {
+  const user = quotaEditorUser.value
+  if (!user) return
+  const totalQuota = Number(quotaAmount.value)
+  if (['add', 'deduct'].includes(quotaOperation.value)
+      && (!Number.isSafeInteger(totalQuota) || totalQuota <= 0)) {
+    quotaSaveError.value = '请输入大于 0 的整数 Token 数量'
+    return
+  }
+  quotaSaving.value = true
+  quotaSaveError.value = ''
+  try {
+    const response = await fetch(`/api/admin/api/users/${user.id}/credits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: ['add', 'deduct'].includes(quotaOperation.value) ? totalQuota : 0,
+        operation: quotaOperation.value,
+        note: quotaNote.value,
+        operationId: quotaOperationId.value,
+      }),
+    })
+    if (!response.ok) {
+      quotaSaveError.value = quotaOperation.value === 'deduct' ? '扣减失败，请确认未超过当前可用余额' : '额度保存失败，请稍后重试'
+      return
+    }
+    quotaEditorUser.value = null
+    await loadCurrentPage()
+  } catch {
+    quotaSaveError.value = '无法连接管理服务'
+  } finally {
+    quotaSaving.value = false
+  }
 }
 
 const setApiKeyEnabled = async (key: AdminApiKey) => {
@@ -1104,7 +1155,7 @@ onUnmounted(() => {
         </form>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>用户</th><th>工号</th><th>状态</th><th>后台权限</th><th>团队权限</th><th>会话数</th><th>对话 Token</th><th>API 总额度</th><th>API 已用</th><th>API 请求</th><th>Key 数</th><th>最近登录</th><th>操作</th></tr></thead>
+            <thead><tr><th>用户</th><th>工号</th><th>状态</th><th>后台权限</th><th>团队权限</th><th>会话数</th><th>对话 Token</th><th>API 可用额度</th><th>API 累计已用</th><th>API 请求</th><th>Key 数</th><th>最近登录</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="user in users" :key="user.id">
                 <td><div class="table-user"><span>{{ user.displayName.slice(0, 1) }}</span><strong>{{ user.displayName }}</strong></div></td>
@@ -1114,12 +1165,12 @@ onUnmounted(() => {
                 <td><button class="admin-toggle" :class="{ enabled: user.teamAdministrator }" type="button" @click="setTeamAdministrator(user)"><span></span>{{ user.teamAdministrator ? '团队管理员' : '普通成员' }}</button></td>
                 <td>{{ formatNumber(user.conversationCount) }}</td>
                 <td>{{ formatNumber(user.totalTokens) }}</td>
-                <td>{{ formatNumber(user.apiTotalQuota) }}</td>
+                <td>{{ user.apiQuotaUnlimited ? '无限制' : formatNumber(user.apiAvailableTokens) }}<small v-if="user.apiReservedTokens">（预占 {{ formatNumber(user.apiReservedTokens) }}）</small></td>
                 <td>{{ formatNumber(user.apiUsedTokens) }}</td>
                 <td>{{ formatNumber(user.apiRequestCount) }}</td>
                 <td>{{ formatNumber(user.apiKeyCount) }}</td>
                 <td>{{ formatDateTime(user.lastLoginAt) }}</td>
-                <td><button class="table-action" type="button" @click="setApiQuota(user)">设置额度</button></td>
+                <td><button class="table-action" type="button" @click="openApiQuotaEditor(user)">管理额度</button></td>
               </tr>
               <tr v-if="!users.length && !loading"><td colspan="13" class="empty-table">暂无用户数据</td></tr>
             </tbody>
@@ -1132,6 +1183,38 @@ onUnmounted(() => {
         </div>
       </section>
 
+      <div v-if="quotaEditorUser" class="admin-modal-backdrop">
+        <form class="admin-modal quota-editor-modal" @submit.prevent="saveApiQuota">
+          <header>
+            <div><h2>管理 API Token 额度</h2><p>{{ quotaEditorUser.displayName }} · 可用 {{ quotaEditorUser.apiQuotaUnlimited ? '无限制' : formatNumber(quotaEditorUser.apiAvailableTokens) }}</p></div>
+            <button type="button" class="editor-close" title="关闭" :disabled="quotaSaving" @click="quotaEditorUser = null">×</button>
+          </header>
+          <ElSelect v-model="quotaOperation" aria-label="额度操作" :disabled="quotaSaving" style="width:100%;margin-top:20px">
+            <ElOption label="追加额度" value="add" />
+            <ElOption label="扣减额度" value="deduct" />
+            <ElOption label="设为无限制" value="unlimited" />
+            <ElOption label="恢复余额限制" value="limited" />
+          </ElSelect>
+          <label v-if="quotaOperation === 'add' || quotaOperation === 'deduct'">
+            <span>{{ quotaOperation === 'add' ? '追加' : '扣减' }} Token 数量</span>
+            <input v-model.number="quotaAmount" type="number" min="1" step="1" :disabled="quotaSaving" required />
+          </label>
+          <p v-else class="quota-unlimited-hint">{{ quotaOperation === 'unlimited' ? '持续记录用量，不受余额限制。' : '按现有余额恢复限制，历史已用量保留。' }}</p>
+          <label><span>备注</span><input v-model="quotaNote" maxlength="500" :disabled="quotaSaving" /></label>
+          <p v-if="quotaSaveError" class="model-save-error">{{ quotaSaveError }}</p>
+          <footer class="editor-actions">
+            <button type="button" :disabled="quotaSaving" @click="quotaEditorUser = null">取消</button>
+            <button class="primary" type="submit" :disabled="quotaSaving">{{ quotaSaving ? '保存中…' : '保存' }}</button>
+          </footer>
+          <h3>最近调整记录</h3>
+          <p v-if="!quotaHistory.length">暂无调整记录</p>
+          <div v-for="item in quotaHistory" :key="item.id" class="quota-history-row">
+            <strong>{{ ({add:'追加',deduct:'扣减',unlimited:'设为无限制',limited:'恢复余额限制'} as Record<string,string>)[item.operation] }} {{ item.amount ? formatNumber(item.amount) : '' }}</strong>
+            <small>{{ item.actor }} · {{ formatDateTime(item.created_at) }}</small><p v-if="item.note">{{ item.note }}</p>
+          </div>
+        </form>
+      </div>
+
       <section v-if="adminPage === 'settings'" class="admin-panel settings-panel">
         <div class="panel-heading"><div><h2>系统设置</h2><p>这里展示运行策略。域名、HTTP/HTTPS 端口由部署文件和反向代理固定管理。</p></div></div>
         <div class="settings-grid"><article><strong>访问地址</strong><span>由 Docker Compose、nginx 与证书配置决定，部署后不在后台动态修改</span></article><article><strong>认证模式</strong><span>本地管理员 + OAuth2 用户</span></article><article><strong>对象存储</strong><span>MinIO 私有 Bucket</span></article><article><strong>异步任务</strong><span>有界后台执行器</span></article><article><strong>模型默认值</strong><span>Embedding、Reranker、语音识别在模型管理中维护</span></article><article><strong>安全原则</strong><span>密钥不写入浏览器，部署参数不通过页面热修改</span></article></div>
@@ -1141,6 +1224,9 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.quota-history-row { display: grid; gap: 5px; padding: 12px 0; border-bottom: 1px solid #e4e8e6; overflow-wrap: anywhere; }
+.quota-history-row small { color: #7a837f; }
+.quota-history-row p { margin: 0; white-space: pre-wrap; }
 .admin-login-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; color: #29302d; background: radial-gradient(circle at 50% 0, #edf5f2, #f5f6f7 45%); }
 .admin-login-card { width: min(100%, 390px); padding: 34px; text-align: center; background: #fff; border: 1px solid #e1e5e3; border-radius: 13px; box-shadow: 0 18px 50px rgba(28, 50, 42, .09); }.admin-login-mark { width: 150px; display: grid; place-items: center; margin: 0 auto 19px; }.admin-login-mark img { display: block; width: 100%; height: auto; }.admin-login-eyebrow { margin: 0 0 5px; color: #298166; font-size: 11px; font-weight: 700; letter-spacing: .08em; }.admin-login-card h1 { margin: 0; font-size: 24px; }.admin-login-copy { margin: 10px 0 23px; color: #7b8380; font-size: 12px; line-height: 1.6; }.admin-login-card form { display: grid; gap: 14px; text-align: left; }.admin-login-card label { display: grid; gap: 6px; color: #555e5a; font-size: 11px; font-weight: 600; }.admin-login-card input { height: 39px; padding: 0 11px; color: #2e3431; background: #fff; border: 1px solid #d6dbd8; border-radius: 7px; outline: 0; }.admin-login-card input:focus { border-color: #4f8f7b; box-shadow: 0 0 0 3px #e8f2ef; }.admin-login-card form > button { height: 41px; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 3px; color: #fff; background: #1d7159; border: 0; border-radius: 7px; font-weight: 600; }.admin-login-card form > button:hover:not(:disabled) { background: #155d48; }.admin-login-card > a { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 20px; color: #7b8380; text-decoration: none; font-size: 11px; }.login-error { margin: -4px 0 0; color: #a14338; font-size: 11px; text-align: left; }
 .admin-shell { height: 100vh; min-height: 0; display: flex; overflow: hidden; color: #252a2e; background: #f5f6f7; }
@@ -1179,6 +1265,7 @@ onUnmounted(() => {
 .table-action { height: 28px; padding: 0 9px; color: #176f55; background: #e8f3ef; border: 0; border-radius: 6px; font-size: 10px; }.table-action:hover { background: #dceee8; }.user-search { display: flex; gap: 8px; margin-top: 16px; }.user-search input { min-width: 260px; height: 34px; padding: 0 11px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 7px; outline: 0; }.user-search input:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.user-search button, .pagination-row button { height: 34px; padding: 0 11px; color: #176f55; background: #e8f3ef; border: 0; border-radius: 7px; font-size: 11px; }.user-search button:hover:not(:disabled), .pagination-row button:hover:not(:disabled) { background: #dceee8; }.pagination-row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 14px; color: #66716c; font-size: 11px; }.pagination-row button:disabled { opacity: .45; cursor: not-allowed; }.api-admin-notice { margin: 14px 0 0; padding: 10px 12px; color: #7a5732; background: #fff7e8; border: 1px solid #f1dbb7; border-radius: 7px; font-size: 11px; }.api-admin-section code { color: #2563eb; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }.api-admin-section small { color: #8b9490; font-size: 10px; }
 .announcement-layout { display: block; margin-top: 17px; }.announcement-list { max-height: 560px; overflow-y: auto; padding-right: 4px; }.announcement-list article { padding: 13px; background: #fff; border: 1px solid #e2e6e4; border-radius: 8px; cursor: pointer; }.announcement-list article.locked { cursor: pointer; }.announcement-list article + article { margin-top: 8px; }.announcement-list article:hover, .announcement-list article.active { background: #f5f8f7; border-color: #b9cbc4; }.announcement-list article > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }.announcement-list strong { overflow: hidden; color: #303633; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.announcement-list span { flex: 0 0 auto; padding: 3px 7px; color: #176f55; background: #e9f4ef; border-radius: 10px; font-size: 9px; }.announcement-list span.off { color: #875047; background: #f8ecea; }.announcement-list p { max-height: 42px; overflow: hidden; margin: 8px 0; color: #737c78; font-size: 10px; line-height: 1.45; }.announcement-list small { color: #9aa19e; font-size: 9px; }.announcement-empty { padding: 28px; color: #979f9b; text-align: center; font-size: 11px; }.announcement-form { display: grid; align-content: start; gap: 12px; padding: 16px; background: #f8faf9; border: 1px solid #e2e7e4; border-radius: 8px; }.announcement-form h3 { margin: 0 0 2px; color: #303633; font-size: 13px; }.announcement-form > label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.announcement-form input:not([type=checkbox]), .announcement-form textarea { width: 100%; padding: 8px 10px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; resize: vertical; }.announcement-form input:focus, .announcement-form textarea:focus { border-color: #4e907b; box-shadow: 0 0 0 3px #eaf3f0; }.announcement-published { display: flex !important; align-items: center; gap: 7px; color: #23765d !important; }.announcement-actions { display: flex; align-items: center; gap: 10px; }.announcement-actions span { margin-right: auto; color: #66716c; font-size: 10px; }.announcement-actions button { height: 34px; padding: 0 12px; color: #5f6864; background: #fff; border: 1px solid #d9dfdc; border-radius: 6px; font-size: 10px; }.announcement-actions button.primary { color: #fff; background: #1e745a; border-color: #1e745a; }
 .admin-modal-backdrop { position: fixed; inset: 0; z-index: 55; display: grid; place-items: center; padding: 20px; background: rgba(20, 28, 25, .45); }.admin-modal { width: min(100%, 640px); max-height: calc(100vh - 40px); overflow-y: auto; padding: 22px; background: #fff; border-radius: 11px; box-shadow: 0 20px 60px rgba(0,0,0,.2); }.announcement-editor-modal { display: grid; gap: 13px; }.announcement-editor-modal > label { display: grid; gap: 6px; color: #59625e; font-size: 10px; font-weight: 600; }.announcement-editor-modal input, .announcement-editor-modal textarea { width: 100%; padding: 9px 10px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; resize: vertical; }.announcement-actions.fixed { justify-content: flex-end; }.announcement-actions.fixed span { margin-right: auto; }.announcement-detail-modal p { max-height: 55vh; overflow-y: auto; margin: 16px 0 0; color: #4d5753; font-size: 13px; line-height: 1.75; white-space: pre-wrap; }
+.quota-editor-modal { width: min(100%, 460px); }.quota-editor-modal > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }.quota-editor-modal h2 { margin: 0; font-size: 18px; }.quota-editor-modal header p { margin: 6px 0 0; color: #7a837f; font-size: 12px; }.quota-editor-modal > label { display: grid; gap: 7px; margin-top: 17px; color: #59625e; font-size: 11px; font-weight: 600; }.quota-editor-modal input { width: 100%; height: 38px; padding: 0 10px; color: #303633; background: #fff; border: 1px solid #d8ddda; border-radius: 6px; outline: 0; }.quota-mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 20px; padding: 4px; background: #f1f3f2; border-radius: 7px; }.quota-mode-switch button { height: 35px; color: #68716d; background: transparent; border: 0; border-radius: 5px; font-weight: 600; }.quota-mode-switch button.active { color: #fff; background: #1e745a; box-shadow: 0 1px 3px rgba(20, 45, 36, .18); }.quota-unlimited-hint { margin: 17px 0 0; padding: 11px 12px; color: #496157; background: #eef6f3; border-radius: 7px; font-size: 12px; line-height: 1.6; }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }.settings-grid article { padding: 15px; background: #f7f8f8; border: 1px solid #e6e8e7; border-radius: 7px; }.settings-grid strong, .settings-grid span { display: block; }.settings-grid strong { color: #3c4440; font-size: 11px; }.settings-grid span { margin-top: 6px; color: #838b87; font-size: 10px; }
 @media (max-width: 900px) { .admin-sidebar { width: 188px; flex-basis: 188px; }.admin-brand img { width: 62px; }.metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.model-grid { grid-template-columns: 1fr 1fr; }.admin-content { padding: 24px 20px 36px; } }
 @media (max-width: 650px) { .admin-shell { display: block; }.admin-sidebar { position: static; width: 100%; height: auto; padding: 13px; }.admin-brand { padding-bottom: 12px; }.admin-sidebar nav { display: flex; overflow-x: auto; margin-top: 12px; }.admin-sidebar nav a, .admin-sidebar nav span { flex: 0 0 auto; }.back-workspace { margin-top: 10px; padding-top: 10px; }.admin-content { padding: 20px 12px 30px; }.metric-grid, .model-defaults, .model-grid, .model-form-grid, .prompt-admin-layout, .announcement-layout, .settings-grid, .usage-split { grid-template-columns: 1fr; }.announcement-actions, .user-search { align-items: flex-start; flex-direction: column; }.user-search input { width: 100%; min-width: 0; }.announcement-actions span { margin-right: 0; }.model-form-grid label.wide { grid-column: auto; }.usage-chart { gap: 4px; padding-left: 0; padding-right: 0; }.admin-topbar { align-items: flex-start; } }

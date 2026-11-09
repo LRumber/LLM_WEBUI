@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class ApiGatewayRepository {
@@ -102,7 +103,8 @@ public class ApiGatewayRepository {
         return jdbc.query("""
                 SELECT api_key.id, api_key.user_id, api_key.key_prefix,
                        COALESCE(api_user_quota.total_token_quota, ?) AS quota,
-                       COALESCE(usage.used_tokens, 0) AS used_tokens
+                       COALESCE(usage.used_tokens, 0) AS used_tokens,
+                       COALESCE(api_user_quota.unlimited, FALSE) AS unlimited
                 FROM api_key
                 JOIN app_user ON app_user.id = api_key.user_id
                 LEFT JOIN api_user_quota ON api_user_quota.user_id = api_key.user_id
@@ -117,35 +119,45 @@ public class ApiGatewayRepository {
                 rs.getLong("user_id"),
                 rs.getString("key_prefix"),
                 rs.getLong("quota"),
-                rs.getLong("used_tokens")
+                rs.getLong("used_tokens"),
+                rs.getBoolean("unlimited")
         ), DEFAULT_API_TOKEN_QUOTA, hash(secret)).stream().findFirst();
     }
 
     public ApiQuotaSummary quota(long userId) {
         return jdbc.queryForObject("""
                 SELECT COALESCE(api_user_quota.total_token_quota, ?) AS quota,
+                       COALESCE(api_user_quota.unlimited, FALSE) AS unlimited,
+                       COALESCE((SELECT SUM(tokens) FROM api_credit_reservation WHERE user_id = app_user.id AND expires_at > CURRENT_TIMESTAMP), 0) AS reserved,
+                       COALESCE(SUM(CASE WHEN daily_api_usage.usage_date = CURRENT_DATE THEN daily_api_usage.input_tokens + daily_api_usage.output_tokens ELSE 0 END), 0) AS today_tokens,
+                       COALESCE(SUM(CASE WHEN daily_api_usage.usage_date >= date_trunc('month', CURRENT_DATE)::date THEN daily_api_usage.input_tokens + daily_api_usage.output_tokens ELSE 0 END), 0) AS month_tokens,
                        COALESCE(SUM(daily_api_usage.input_tokens + daily_api_usage.output_tokens), 0) AS used_tokens,
                        COALESCE(SUM(daily_api_usage.request_count), 0) AS request_count
                 FROM app_user
                 LEFT JOIN api_user_quota ON api_user_quota.user_id = app_user.id
                 LEFT JOIN daily_api_usage ON daily_api_usage.user_id = app_user.id
                 WHERE app_user.id = ?
-                GROUP BY api_user_quota.total_token_quota
+                GROUP BY app_user.id, api_user_quota.total_token_quota, api_user_quota.unlimited
                 """, (rs, rowNum) -> {
             long quota = rs.getLong("quota");
             long used = rs.getLong("used_tokens");
-            return new ApiQuotaSummary(quota, used, Math.max(0, quota - used), rs.getLong("request_count"));
+            return new ApiQuotaSummary(
+                    quota, used, Math.max(0, quota - used - rs.getLong("reserved")),
+                    rs.getLong("request_count"), rs.getBoolean("unlimited"),
+                    rs.getLong("reserved"), rs.getLong("today_tokens"), rs.getLong("month_tokens")
+            );
         }, DEFAULT_API_TOKEN_QUOTA, userId);
     }
 
-    public void setQuota(long userId, long totalQuota) {
+    public void setQuota(long userId, long totalQuota, boolean unlimited) {
         jdbc.update("""
-                INSERT INTO api_user_quota (user_id, total_token_quota, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO api_user_quota (user_id, total_token_quota, unlimited, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT (user_id) DO UPDATE SET
                     total_token_quota = EXCLUDED.total_token_quota,
+                    unlimited = EXCLUDED.unlimited,
                     updated_at = CURRENT_TIMESTAMP
-                """, userId, totalQuota);
+                """, userId, totalQuota, unlimited);
     }
 
     public boolean isModelEnabled(String modelKey) {
@@ -193,6 +205,7 @@ public class ApiGatewayRepository {
         ), days, userId);
     }
 
+    @Transactional
     public void recordUsage(
             UUID requestId,
             ApiPrincipal principal,
@@ -202,15 +215,19 @@ public class ApiGatewayRepository {
             int outputTokens,
             String status,
             String errorCode,
-            int durationMs
+            int durationMs,
+            boolean estimated
     ) {
-        jdbc.update("""
+        jdbc.queryForObject("SELECT user_id FROM api_user_quota WHERE user_id = ? FOR UPDATE", Long.class, principal.userId());
+        int inserted = jdbc.update("""
                 INSERT INTO api_usage_event (
                     request_id, user_id, api_key_id, model_key, endpoint,
-                    input_tokens, output_tokens, status, error_code, duration_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    input_tokens, output_tokens, status, error_code, duration_ms, estimated
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (request_id) DO NOTHING
                 """, requestId, principal.userId(), principal.keyId(), model, endpoint,
-                inputTokens, outputTokens, status, errorCode, durationMs);
+                inputTokens, outputTokens, status, errorCode, durationMs, estimated);
+        if (inserted == 0) return;
         jdbc.update("""
                 INSERT INTO daily_api_usage (
                     usage_date, user_id, request_count, input_tokens, output_tokens
@@ -222,6 +239,7 @@ public class ApiGatewayRepository {
                     last_aggregated_at = CURRENT_TIMESTAMP
                 """, principal.userId(), inputTokens, outputTokens);
         jdbc.update("UPDATE api_key SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?", principal.keyId());
+        jdbc.update("DELETE FROM api_credit_reservation WHERE request_id = ?", requestId);
     }
 
     public AdminApiOverview adminOverview() {
@@ -271,6 +289,7 @@ public class ApiGatewayRepository {
         return jdbc.query("""
                 SELECT app_user.id, app_user.account_number, app_user.display_name,
                        COALESCE(api_user_quota.total_token_quota, ?) AS quota,
+                       COALESCE(api_user_quota.unlimited, FALSE) AS quota_unlimited,
                        COALESCE(usage.used_tokens, 0) AS used_tokens,
                        COALESCE(usage.request_count, 0) AS request_count,
                        COALESCE(keys.key_count, 0) AS key_count
@@ -291,6 +310,7 @@ public class ApiGatewayRepository {
                 rs.getString("account_number"),
                 rs.getString("display_name"),
                 rs.getLong("quota"),
+                rs.getBoolean("quota_unlimited"),
                 rs.getLong("used_tokens"),
                 rs.getLong("request_count"),
                 rs.getInt("key_count")

@@ -92,6 +92,8 @@ public class AdminRepository {
                        COALESCE(conversations.conversation_count, 0) AS conversation_count,
                        COALESCE(usage.total_tokens, 0) AS total_tokens,
                        COALESCE(api_quota.total_token_quota, ?) AS api_total_quota,
+                       COALESCE(api_quota.unlimited, FALSE) AS api_quota_unlimited,
+                       COALESCE((SELECT SUM(tokens) FROM api_credit_reservation WHERE user_id = user_account.id AND expires_at > CURRENT_TIMESTAMP), 0) AS reserved_tokens,
                        COALESCE(api_usage.used_tokens, 0) AS api_used_tokens,
                        COALESCE(api_usage.request_count, 0) AS api_request_count,
                        COALESCE(api_keys.key_count, 0) AS api_key_count
@@ -132,6 +134,9 @@ public class AdminRepository {
                 rs.getLong("conversation_count"),
                 rs.getLong("total_tokens"),
                 rs.getLong("api_total_quota"),
+                Math.max(0, rs.getLong("api_total_quota") - rs.getLong("api_used_tokens") - rs.getLong("reserved_tokens")),
+                rs.getLong("reserved_tokens"),
+                rs.getBoolean("api_quota_unlimited"),
                 rs.getLong("api_used_tokens"),
                 rs.getLong("api_request_count"),
                 rs.getInt("api_key_count")

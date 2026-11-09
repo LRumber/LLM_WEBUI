@@ -5,6 +5,7 @@ public record AdminApiUserSummary(
         String accountNumber,
         String displayName,
         long totalQuota,
+        boolean quotaUnlimited,
         long usedTokens,
         long requestCount,
         int keyCount

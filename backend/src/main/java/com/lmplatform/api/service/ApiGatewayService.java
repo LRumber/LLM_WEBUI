@@ -71,7 +71,8 @@ public class ApiGatewayService {
     }
 
     public void ensureQuota(ApiPrincipal principal) {
-        if (principal.totalQuota() <= 0 || principal.usedTokens() >= principal.totalQuota()) {
+        if (!principal.unlimited()
+                && (principal.totalQuota() <= 0 || principal.usedTokens() >= principal.totalQuota())) {
             throw new ApiGatewayException(
                     "quota_exceeded",
                     "API token quota exceeded. Please contact your administrator.",

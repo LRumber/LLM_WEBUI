@@ -7,7 +7,8 @@ public record ApiPrincipal(
         long userId,
         String keyPrefix,
         long totalQuota,
-        long usedTokens
+        long usedTokens,
+        boolean unlimited
 ) {
     public long remainingTokens() {
         return Math.max(0, totalQuota - usedTokens);

@@ -15,6 +15,9 @@ public record AdminUserSummary(
         long conversationCount,
         long totalTokens,
         long apiTotalQuota,
+        long apiAvailableTokens,
+        long apiReservedTokens,
+        boolean apiQuotaUnlimited,
         long apiUsedTokens,
         long apiRequestCount,
         int apiKeyCount

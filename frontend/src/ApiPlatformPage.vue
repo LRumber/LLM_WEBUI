@@ -34,6 +34,10 @@ interface ApiDeveloperSummary {
     usedTokens: number
     remainingTokens: number
     requestCount: number
+    unlimited: boolean
+    reservedTokens: number
+    todayTokens: number
+    monthTokens: number
   }
   models: ApiModelSummary[]
   dailyUsage: ApiUsageDay[]
@@ -48,10 +52,6 @@ const copied = ref('')
 const activeSection = ref<'usage' | 'keys' | 'docs'>('usage')
 
 const formatNumber = (value: number) => new Intl.NumberFormat('zh-CN').format(value)
-const usagePercent = computed(() => {
-  if (!summary.value?.quota.totalQuota) return 0
-  return Math.min(100, Math.round((summary.value.quota.usedTokens / summary.value.quota.totalQuota) * 100))
-})
 const maxDailyTokens = computed(() => Math.max(...(summary.value?.dailyUsage ?? []).map((day) => day.inputTokens + day.outputTokens), 1))
 const chatModels = computed(() => summary.value?.models.filter((model) => model.capabilities.includes('chat')) ?? [])
 const embeddingModels = computed(() => summary.value?.models.filter((model) => model.capabilities.includes('embedding')) ?? [])
@@ -120,12 +120,13 @@ onMounted(load)
       <section v-if="activeSection === 'usage'" class="api-section">
         <header><h1>用量信息</h1><p>API 调用独立统计，不计入网页对话用量。</p></header>
         <div class="api-metrics">
-          <article><span>总额度</span><strong>{{ formatNumber(summary?.quota.totalQuota ?? 0) }}</strong><small>tokens</small></article>
-          <article><span>已用额度</span><strong>{{ formatNumber(summary?.quota.usedTokens ?? 0) }}</strong><small>tokens</small></article>
-          <article><span>剩余额度</span><strong>{{ formatNumber(summary?.quota.remainingTokens ?? 0) }}</strong><small>tokens</small></article>
-          <article><span>请求次数</span><strong>{{ formatNumber(summary?.quota.requestCount ?? 0) }}</strong><small>次</small></article>
+          <article><span>今日用量</span><strong>{{ formatNumber(summary?.quota.todayTokens ?? 0) }}</strong><small>tokens</small></article>
+          <article><span>累计已用</span><strong>{{ formatNumber(summary?.quota.usedTokens ?? 0) }}</strong><small>tokens</small></article>
+          <article><span>剩余额度</span><strong>{{ summary?.quota.unlimited ? '无限制' : formatNumber(summary?.quota.remainingTokens ?? 0) }}</strong><small v-if="!summary?.quota.unlimited">tokens</small></article>
+          <article><span>本月用量</span><strong>{{ formatNumber(summary?.quota.monthTokens ?? 0) }}</strong><small>tokens</small></article>
         </div>
-        <div class="api-quota-bar"><span :style="{ width: `${usagePercent}%` }"></span></div>
+        <p v-if="summary?.quota.reservedTokens">正在处理的请求预占 {{ formatNumber(summary.quota.reservedTokens) }} tokens，结束后按用量结算。</p>
+        <p>累计请求 {{ formatNumber(summary?.quota.requestCount ?? 0) }} 次</p>
 
         <section class="api-usage-chart">
           <h2>近 30 天用量</h2>

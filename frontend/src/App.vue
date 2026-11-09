@@ -980,12 +980,12 @@ const openConversation = async (conversation: ConversationSummary, forceBottom =
   selectedTemplateId.value = conversation.promptTemplateId ?? ''
   messages.value = persisted
     .filter((message): message is PersistedMessage & { role: Role } =>
-      Boolean(message.content) && message.role !== 'system')
+      (Boolean(message.content) || message.status === 'failed' || message.status === 'interrupted') && message.role !== 'system')
     .map((message) => ({
       id: message.id,
       role: message.role,
-      content: message.content,
-      error: message.status === 'failed',
+      content: message.content || '当前模型暂时不可用，请稍后重试或切换其他模型。',
+      error: message.status === 'failed' || message.status === 'interrupted',
       editedAt: message.editedAt,
       versionIndex: message.versionIndex,
       versionCount: message.versionCount,

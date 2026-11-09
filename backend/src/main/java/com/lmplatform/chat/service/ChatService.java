@@ -210,6 +210,9 @@ public class ChatService {
                             reasoningDurationMs, startedAt
                     )
             );
+            if (assistantContent.isEmpty()) {
+                throw new IOException("empty_model_response");
+            }
             int durationMs = elapsedMs(startedAt);
             Integer firstTokenMs = firstTokenAt.get() == 0
                     ? null
@@ -245,7 +248,7 @@ public class ChatService {
                         assistantContent.toString()
                 );
             }
-        } catch (IOException exception) {
+        } catch (IOException | RuntimeException exception) {
             String status = assistantContent.isEmpty() ? "failed" : "interrupted";
             repository.finishAssistantMessage(
                     assistantMessageId, assistantContent.toString(), status,
@@ -663,8 +666,14 @@ public class ChatService {
     }
 
     private String safeMessage(Exception exception) {
-        String message = exception.getMessage();
-        return message == null || message.isBlank() ? "Chat service failed" : message;
+        String message = String.valueOf(exception.getMessage()).toLowerCase(java.util.Locale.ROOT);
+        if (message.contains("timeout") || message.contains("timed out")) {
+            return "当前模型响应超时，请稍后重试或切换其他模型。";
+        }
+        if (message.contains("401") || message.contains("403") || message.contains("api key")) {
+            return "当前模型认证失败，请联系管理员检查模型配置，或切换其他模型。";
+        }
+        return "当前模型暂时不可用，请稍后重试或切换其他模型。";
     }
 
     private record CompactedContext(String summary, List<ModelContextMessage> messages) {

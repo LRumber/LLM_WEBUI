@@ -31,6 +31,35 @@ import org.junit.jupiter.api.Test;
 /** Unit tests for the chat orchestration boundary without network or database dependencies. */
 class ChatServiceTest {
 
+    @Test
+    void unavailableOrEmptyModelResponseProducesErrorEventAndPersistsFailedState() throws Exception {
+        for (Exception failure : List.of(new java.io.IOException("Upstream returned 503: internal detail"),
+                new org.springframework.web.client.ResourceAccessException("Connection refused"),
+                new java.io.IOException("empty_model_response"))) {
+            ConversationRepository repository = mock(ConversationRepository.class);
+            AiServiceClient client = mock(AiServiceClient.class);
+            ChatService service = new ChatService(repository, client, new ObjectMapper(), mock(TitleGenerationService.class),
+                    new AiServiceProperties("http://localhost:8001", 150, "test", 40),
+                    mock(ObjectStorageService.class), mock(KnowledgeBaseService.class), mock(KnowledgeSearchService.class));
+            UUID conversationId = UUID.randomUUID();
+            UUID previousId = UUID.randomUUID();
+            UUID replacementId = UUID.randomUUID();
+            when(repository.prepareAssistantRegeneration(conversationId, previousId, 1L)).thenReturn(true);
+            when(repository.appendMessage(conversationId, "assistant", "", "generating")).thenReturn(replacementId);
+            when(repository.modelContextMessages(conversationId, 40)).thenReturn(List.of(
+                    new ModelContextMessage(1, "user", "hello", List.of())));
+            doAnswer(invocation -> {
+                if ("empty_model_response".equals(failure.getMessage())) return null;
+                throw failure;
+            }).when(client).streamChat(eq("test"), any(), eq(false), any());
+            var output = new ByteArrayOutputStream();
+            service.regenerate(1L, conversationId, previousId, "test", output);
+            assertThat(output.toString(StandardCharsets.UTF_8)).contains("\"type\":\"error\"", "当前模型暂时不可用")
+                    .doesNotContain("Connection refused", "internal detail");
+            verify(repository).finishAssistantMessage(replacementId, "", "failed", 0, 0, null, null, "stream_error");
+        }
+    }
+
     /** Confirms event forwarding, persistence, accounting, and title scheduling for a new chat. */
     @Test
     void streamsEventsAndPersistsCompletedResponse() throws Exception {

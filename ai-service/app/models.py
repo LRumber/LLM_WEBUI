@@ -58,6 +58,7 @@ class ModelEndpoint(BaseModel):
     capabilities: set[ModelCapability]
     enabled: bool = True
     frontend_visible: bool = True
+    display_order: int = Field(default=100, ge=0, le=999999)
     reasoning_mode: ReasoningMode = ReasoningMode.NONE
     context_window: int | None = Field(default=None, gt=0)
     max_concurrency: int = Field(default=4, ge=1, le=1024)

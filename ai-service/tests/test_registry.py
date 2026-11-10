@@ -91,3 +91,40 @@ def test_registry_encrypts_api_key_and_hides_plaintext(tmp_path):
     reloaded = ModelRegistry(str(config))
     reloaded.load()
     assert reloaded.get("secured-chat").api_key.get_secret_value() == "top-secret"
+
+
+def test_frontend_order_is_stable_filtered_and_persisted(tmp_path):
+    config = tmp_path / "models.json"
+    registry = ModelRegistry(str(config))
+    for key, order, visible, enabled in [
+        ("first-chat", 100, True, True),
+        ("second-chat", 100, True, True),
+        ("top-chat", 10, True, True),
+        ("hidden-chat", 0, False, True),
+        ("disabled-chat", 0, True, False),
+    ]:
+        registry.upsert(ModelEndpoint(
+            key=key, display_name=key, provider="openai-compatible",
+            base_url="http://localhost:8000/v1", model_name=key,
+            capabilities={ModelCapability.CHAT}, display_order=order,
+            frontend_visible=visible, enabled=enabled,
+        ))
+    reloaded = ModelRegistry(str(config))
+    reloaded.load()
+    assert [model.key for model in reloaded.list_user_visible()] == ["top-chat", "first-chat", "second-chat"]
+    reloaded.upsert(reloaded.get("second-chat").model_copy(update={"display_order": 1}))
+    reloaded.load()
+    assert [model.key for model in reloaded.list_user_visible()] == ["second-chat", "top-chat", "first-chat"]
+    assert [model.key for model in reloaded.list_enabled()] == ["first-chat", "second-chat", "top-chat", "hidden-chat"]
+
+
+def test_existing_models_without_order_keep_original_sequence(tmp_path):
+    config = tmp_path / "models.json"
+    config.write_text(json.dumps({"models": [
+        {"key": key, "display_name": key, "provider": "openai-compatible",
+         "base_url": "http://localhost:8000/v1", "model_name": key, "capabilities": ["chat"]}
+        for key in ["z-chat", "a-chat"]
+    ]}), encoding="utf-8")
+    registry = ModelRegistry(str(config))
+    registry.load()
+    assert [model.key for model in registry.list_user_visible()] == ["z-chat", "a-chat"]

@@ -12,7 +12,7 @@ import {
   Users,
   Zap,
 } from 'lucide-vue-next'
-import { ElOption, ElSelect } from 'element-plus'
+import { ElDatePicker, ElOption, ElSelect } from 'element-plus'
 import { adminPageMeta, resolveAdminPage } from './adminRouting'
 
 interface AdminOverview {
@@ -28,6 +28,21 @@ interface DailyUsage {
   requestCount: number
   inputTokens: number
   outputTokens: number
+}
+
+interface UsageTotals {
+  source: string
+  requestCount: number
+  inputTokens: number
+  outputTokens: number
+  failedRequestCount: number
+}
+interface UsageReport {
+  month: string
+  totals: UsageTotals[]
+  selectedMonth: UsageTotals[]
+  months: Array<Omit<UsageTotals, 'failedRequestCount'> & { month: string }>
+  models: Array<UsageTotals & { modelKey: string }>
 }
 
 interface AdminUser {
@@ -68,6 +83,7 @@ interface ModelRegistration {
   capabilities: string[]
   enabled: boolean
   frontend_visible: boolean
+  display_order?: number
   reasoning_mode?: 'none' | 'qwen3' | 'deepseek_v4' | 'deepseek_r1' | 'always'
   context_window?: number | string
   api_key_env?: string
@@ -139,12 +155,22 @@ const overview = ref<AdminOverview>({
 })
 const dailyUsage = ref<DailyUsage[]>([])
 const apiDailyUsage = ref<DailyUsage[]>([])
+const cumulativeUsage = ref<UsageTotals[]>([])
+const usageMonth = ref(new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }).slice(0, 7))
+const usageModelScope = ref('month')
+const usageReport = ref<UsageReport | null>(null)
+const usageSources = [{ key: 'chat', label: '网页对话' }, { key: 'api', label: 'API 调用' }]
+const usageFor = (rows: UsageTotals[], source: string): UsageTotals => rows.find((row) => row.source === source)
+  ?? { source, requestCount: 0, inputTokens: 0, outputTokens: 0, failedRequestCount: 0 }
+const cumulativeRequests = computed(() => cumulativeUsage.value.reduce((sum, row) => sum + row.requestCount, 0))
+const cumulativeTokens = computed(() => cumulativeUsage.value.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0))
 const users = ref<AdminUser[]>([])
 const userSearch = ref('')
 const userPage = ref(0)
 const userPageSize = ref(20)
 const userTotal = ref(0)
 const models = ref<ModelRegistration[]>([])
+const orderedModels = computed(() => [...models.value].sort((a, b) => (a.display_order ?? 100) - (b.display_order ?? 100)))
 const apiOverview = ref<AdminApiOverview>({
   enabledKeyCount: 0,
   enabledModelCount: 0,
@@ -278,23 +304,28 @@ const loadCurrentPage = async () => {
   loadError.value = false
   try {
     if (adminPage.value === 'overview') {
-      const [response, apiResponse] = await Promise.all([
+      const [response, apiResponse, totalsResponse] = await Promise.all([
         fetch('/api/admin/overview'),
         fetch('/api/admin/api/overview'),
+        fetch('/api/admin/usage/totals'),
       ])
       if (!response.ok) throw new Error('Overview unavailable')
       overview.value = await response.json()
+      if (!totalsResponse.ok) throw new Error('Totals unavailable')
+      cumulativeUsage.value = await totalsResponse.json()
       if (apiResponse.ok) apiOverview.value = await apiResponse.json()
     } else if (adminPage.value === 'users') {
       await loadUsers()
     } else if (adminPage.value === 'usage') {
-      const [response, apiResponse] = await Promise.all([
+      const [response, apiResponse, reportResponse] = await Promise.all([
         fetch('/api/admin/usage/daily?days=7'),
         fetch('/api/admin/api/usage/daily?days=7'),
+        fetch(`/api/admin/usage/report?month=${encodeURIComponent(usageMonth.value)}&scope=${usageModelScope.value}`),
       ])
-      if (!response.ok || !apiResponse.ok) throw new Error('Usage unavailable')
+      if (!response.ok || !apiResponse.ok || !reportResponse.ok) throw new Error('Usage unavailable')
       dailyUsage.value = await response.json()
       apiDailyUsage.value = await apiResponse.json()
+      usageReport.value = await reportResponse.json()
     } else if (adminPage.value === 'models') {
       await loadModels()
     } else if (adminPage.value === 'api') {
@@ -527,7 +558,7 @@ const setTeamAdministrator = async (user: AdminUser) => {
 const createModel = () => {
   modelForm.value = {
     key: '', display_name: '', provider: 'openai-compatible', engine: 'openai-compatible', category: 'language', base_url: '', model_name: '',
-    capabilities: ['chat'], enabled: true, frontend_visible: true, reasoning_mode: 'none', context_window: 32768, api_key: '',
+    capabilities: ['chat'], enabled: true, frontend_visible: true, display_order: 100, reasoning_mode: 'none', context_window: 32768, api_key: '',
   }
   modelSaveError.value = ''
   modelDiscoverMessage.value = ''
@@ -537,7 +568,7 @@ const createModel = () => {
 
 /** Copies an existing registration so edits remain cancelable until explicitly saved. */
 const editModel = (model: ModelRegistration) => {
-  modelForm.value = { ...JSON.parse(JSON.stringify(model)), reasoning_mode: model.reasoning_mode ?? 'none', api_key: '' }
+  modelForm.value = { ...JSON.parse(JSON.stringify(model)), display_order: model.display_order ?? 100, reasoning_mode: model.reasoning_mode ?? 'none', api_key: '' }
   modelSaveError.value = ''
   modelDiscoverMessage.value = ''
   discoveredModels.value = []
@@ -891,6 +922,16 @@ onUnmounted(() => {
       </div>
 
       <section v-if="adminPage === 'overview'" class="admin-panel api-overview-panel">
+        <div class="panel-heading"><div><h2>累计统计</h2></div></div>
+        <div class="metric-grid compact">
+          <article><div><small>累计请求（对话 + API）</small><strong>{{ formatNumber(cumulativeRequests) }}</strong></div></article>
+          <article><div><small>累计 Token（对话 + API）</small><strong>{{ formatNumber(cumulativeTokens) }}</strong></div></article>
+          <article><div><small>对话累计 Token</small><strong>{{ formatNumber(usageFor(cumulativeUsage, 'chat').inputTokens + usageFor(cumulativeUsage, 'chat').outputTokens) }}</strong></div></article>
+          <article><div><small>API 累计 Token</small><strong>{{ formatNumber(usageFor(cumulativeUsage, 'api').inputTokens + usageFor(cumulativeUsage, 'api').outputTokens) }}</strong></div></article>
+        </div>
+      </section>
+
+      <section v-if="adminPage === 'overview'" class="admin-panel api-overview-panel">
         <div class="panel-heading">
           <div><h2>API 中转站</h2><p>独立统计开放 API 的 Key、模型与调用量，不计入网页对话用量</p></div>
           <a class="panel-link" href="/admin/api">进入 API 管理</a>
@@ -934,10 +975,11 @@ onUnmounted(() => {
           <span v-if="modelSettingsMessage">{{ modelSettingsMessage }}</span>
         </form>
         <div class="model-grid">
-          <article v-for="model in models" :key="model.key" class="model-card">
+          <article v-for="model in orderedModels" :key="model.key" class="model-card">
             <div class="model-card-heading"><span><Bot :size="18" /></span><div><strong>{{ model.display_name }}</strong><small>{{ model.key }}</small></div><i :class="{ enabled: model.enabled }">{{ model.enabled ? '启用' : '停用' }}</i></div>
             <dl><div><dt>类型</dt><dd>{{ ({ language: '大语言模型', multimodal: '多模态', embedding: 'Embedding', rerank: 'Rerank', speech: '语音识别' } as Record<string, string>)[model.category] }}</dd></div><div><dt>运行</dt><dd>{{ model.enabled ? '启用' : '停用' }}</dd></div><div><dt>前台展示</dt><dd>{{ model.frontend_visible ? '展示' : '隐藏' }}</dd></div><div><dt>上下文</dt><dd>{{ formatContextWindow(model.context_window) }}</dd></div></dl>
             <p>{{ model.base_url }}</p>
+            <p v-if="model.capabilities.includes('chat')">前台展示顺序：{{ model.display_order ?? 100 }}</p>
             <div class="model-card-actions"><button type="button" @click="checkModel(model)">{{ modelHealth[model.key] || '健康检查' }}</button><button type="button" @click="editModel(model)">编辑</button><button class="danger" type="button" @click="deleteModel(model)">移除</button></div>
           </article>
           <p v-if="!models.length" class="model-empty">AI 服务尚无模型注册或当前不可用。</p>
@@ -1071,6 +1113,7 @@ onUnmounted(() => {
           <div class="model-form-grid">
             <label>模型标识<input v-model="modelForm.key" pattern="[a-z0-9][a-z0-9._-]+" required /></label>
             <label>显示名称<input v-model="modelForm.display_name" required /></label>
+            <label v-if="modelForm.category === 'language' || modelForm.category === 'multimodal'">前台展示顺序（数值越小越靠前）<input v-model.number="modelForm.display_order" type="number" min="0" max="999999" step="1" required /></label>
             <label>模型类型
               <ElSelect v-model="modelForm.category" class="admin-select" popper-class="admin-select-dropdown">
                 <ElOption label="大语言模型" value="language" />
@@ -1115,6 +1158,47 @@ onUnmounted(() => {
       </div>
 
       <section v-if="adminPage === 'usage'" class="admin-panel usage-panel">
+        <div class="panel-heading usage-filters">
+          <div><h2>月度与累计用量</h2><p>月度统计按北京时间，Token 为输入与输出之和；对话包含已记录的标题生成消耗。</p></div>
+          <ElDatePicker v-model="usageMonth" type="month" value-format="YYYY-MM" format="YYYY 年 MM 月" :clearable="false" :disabled="loading" aria-label="统计月份" @change="loadCurrentPage" />
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>来源</th><th>所选月请求</th><th>所选月输入 Token</th><th>所选月输出 Token</th><th>所选月总 Token</th><th>累计请求</th><th>累计输入 Token</th><th>累计输出 Token</th><th>累计总 Token</th></tr></thead>
+            <tbody><tr v-for="source in usageSources" :key="source.key">
+              <td>{{ source.label }}</td>
+              <td>{{ formatNumber(usageFor(usageReport?.selectedMonth ?? [], source.key).requestCount) }}</td>
+              <td>{{ formatNumber(usageFor(usageReport?.selectedMonth ?? [], source.key).inputTokens) }}</td>
+              <td>{{ formatNumber(usageFor(usageReport?.selectedMonth ?? [], source.key).outputTokens) }}</td>
+              <td>{{ formatNumber(usageFor(usageReport?.selectedMonth ?? [], source.key).inputTokens + usageFor(usageReport?.selectedMonth ?? [], source.key).outputTokens) }}</td>
+              <td>{{ formatNumber(usageFor(usageReport?.totals ?? [], source.key).requestCount) }}</td>
+              <td>{{ formatNumber(usageFor(usageReport?.totals ?? [], source.key).inputTokens) }}</td>
+              <td>{{ formatNumber(usageFor(usageReport?.totals ?? [], source.key).outputTokens) }}</td>
+              <td>{{ formatNumber(usageFor(usageReport?.totals ?? [], source.key).inputTokens + usageFor(usageReport?.totals ?? [], source.key).outputTokens) }}</td>
+            </tr></tbody>
+          </table>
+        </div>
+        <div class="panel-heading usage-stat-heading"><div><h2>月度明细</h2><p>所选月份及之前 11 个月</p></div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>月份</th><th>来源</th><th>请求次数</th><th>输入 Token</th><th>输出 Token</th><th>总 Token</th></tr></thead>
+          <tbody><tr v-for="row in usageReport?.months ?? []" :key="`${row.month}-${row.source}`">
+            <td>{{ row.month }}</td><td>{{ row.source === 'chat' ? '网页对话' : 'API 调用' }}</td><td>{{ formatNumber(row.requestCount) }}</td>
+            <td>{{ formatNumber(row.inputTokens) }}</td><td>{{ formatNumber(row.outputTokens) }}</td><td>{{ formatNumber(row.inputTokens + row.outputTokens) }}</td>
+          </tr><tr v-if="!usageReport?.months.length"><td colspan="6" class="empty-table">暂无月度用量</td></tr></tbody>
+        </table></div>
+        <div class="panel-heading usage-stat-heading"><div><h2>分模型用量</h2></div>
+          <ElSelect v-model="usageModelScope" :disabled="loading" aria-label="分模型统计范围" @change="loadCurrentPage">
+            <ElOption label="所选月份" value="month" /><ElOption label="历史累计" value="all" />
+          </ElSelect>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>模型标识</th><th>来源</th><th>请求次数</th><th>失败次数</th><th>输入 Token</th><th>输出 Token</th><th>总 Token</th></tr></thead>
+          <tbody><tr v-for="row in usageReport?.models ?? []" :key="`${row.source}-${row.modelKey}`">
+            <td>{{ row.modelKey }}</td><td>{{ row.source === 'chat' ? '网页对话' : 'API 调用' }}</td><td>{{ formatNumber(row.requestCount) }}</td><td>{{ formatNumber(row.failedRequestCount) }}</td>
+            <td>{{ formatNumber(row.inputTokens) }}</td><td>{{ formatNumber(row.outputTokens) }}</td><td>{{ formatNumber(row.inputTokens + row.outputTokens) }}</td>
+          </tr><tr v-if="!usageReport?.models.length"><td colspan="7" class="empty-table">暂无模型用量</td></tr></tbody>
+        </table></div>
+        <div class="usage-stat-heading"></div>
         <div class="panel-heading"><div><h2>近 7 天用量</h2><p>对话与 API 独立统计，每日输入与输出 Token 总量</p></div></div>
         <div class="usage-split">
           <article>
@@ -1224,6 +1308,9 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.usage-stat-heading { margin-top: 28px; }
+.usage-filters { flex-wrap: wrap; gap: 14px; }
+.usage-stat-heading > .el-select { width: 160px; }
 .quota-history-row { display: grid; gap: 5px; padding: 12px 0; border-bottom: 1px solid #e4e8e6; overflow-wrap: anywhere; }
 .quota-history-row small { color: #7a837f; }
 .quota-history-row p { margin: 0; white-space: pre-wrap; }

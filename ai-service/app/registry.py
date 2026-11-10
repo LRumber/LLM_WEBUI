@@ -43,7 +43,10 @@ class ModelRegistry:
     def list_user_visible(self) -> list[ModelEndpoint]:
         """Return callable models explicitly allowed in the conversation model selector."""
         with self._lock:
-            return [model for model in self._models.values() if model.enabled and model.frontend_visible]
+            return sorted(
+                (model for model in self._models.values() if model.enabled and model.frontend_visible),
+                key=lambda model: model.display_order,
+            )
 
     def list_all(self) -> list[ModelEndpoint]:
         """Return every registration for administration, including disabled models."""

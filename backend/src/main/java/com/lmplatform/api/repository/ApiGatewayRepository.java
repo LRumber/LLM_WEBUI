@@ -22,6 +22,7 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import com.lmplatform.api.service.ApiCallTrace;
 
 @Repository
 public class ApiGatewayRepository {
@@ -240,6 +241,7 @@ public class ApiGatewayRepository {
                 """, principal.userId(), inputTokens, outputTokens);
         jdbc.update("UPDATE api_key SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?", principal.keyId());
         jdbc.update("DELETE FROM api_credit_reservation WHERE request_id = ?", requestId);
+        ApiCallTrace.usage(inputTokens, outputTokens, estimated);
     }
 
     public AdminApiOverview adminOverview() {

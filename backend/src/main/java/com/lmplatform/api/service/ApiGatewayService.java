@@ -66,8 +66,10 @@ public class ApiGatewayService {
             throw new ApiGatewayException("invalid_api_key", "Missing API key", 401);
         }
         String secret = authorization.substring("Bearer ".length()).trim();
-        return repository.authenticate(secret)
+        ApiPrincipal principal = repository.authenticate(secret)
                 .orElseThrow(() -> new ApiGatewayException("invalid_api_key", "Invalid or disabled API key", 401));
+        ApiCallTrace.identify(principal);
+        return principal;
     }
 
     public void ensureQuota(ApiPrincipal principal) {

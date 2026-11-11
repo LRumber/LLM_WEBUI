@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import ApiActivityPanel from './ApiActivityPanel.vue'
+import { ElButton } from 'element-plus'
 import { ArrowLeft, BarChart3, Check, Code2, Copy, KeyRound, RefreshCw, Terminal } from 'lucide-vue-next'
 
 interface ApiKeySummary {
@@ -49,7 +51,7 @@ const keyName = ref('')
 const newSecret = ref('')
 const loading = ref(false)
 const copied = ref('')
-const activeSection = ref<'usage' | 'keys' | 'docs'>('usage')
+const activeSection = ref<'usage' | 'keys' | 'docs' | 'requests' | 'logs'>('usage')
 
 const formatNumber = (value: number) => new Intl.NumberFormat('zh-CN').format(value)
 const maxDailyTokens = computed(() => Math.max(...(summary.value?.dailyUsage ?? []).map((day) => day.inputTokens + day.outputTokens), 1))
@@ -114,11 +116,14 @@ onMounted(load)
       <button :class="{ active: activeSection === 'usage' }" type="button" @click="activeSection = 'usage'"><BarChart3 :size="18" />用量信息</button>
       <button :class="{ active: activeSection === 'keys' }" type="button" @click="activeSection = 'keys'"><KeyRound :size="18" />API Keys</button>
       <button :class="{ active: activeSection === 'docs' }" type="button" @click="activeSection = 'docs'"><Code2 :size="18" />接口文档</button>
+      <button :class="{ active: activeSection === 'requests' }" type="button" @click="activeSection = 'requests'"><KeyRound :size="18" />额度申请</button>
+      <button :class="{ active: activeSection === 'logs' }" type="button" @click="activeSection = 'logs'"><Terminal :size="18" />调用记录</button>
     </aside>
 
     <section class="api-platform-content" :class="{ loading }">
       <section v-if="activeSection === 'usage'" class="api-section">
         <header><h1>用量信息</h1><p>API 调用独立统计，不计入网页对话用量。</p></header>
+        <el-button @click="activeSection = 'requests'">申请额度</el-button>
         <div class="api-metrics">
           <article><span>今日用量</span><strong>{{ formatNumber(summary?.quota.todayTokens ?? 0) }}</strong><small>tokens</small></article>
           <article><span>累计已用</span><strong>{{ formatNumber(summary?.quota.usedTokens ?? 0) }}</strong><small>tokens</small></article>
@@ -169,6 +174,7 @@ onMounted(load)
         </div>
       </section>
 
+      <ApiActivityPanel v-else-if="activeSection === 'requests' || activeSection === 'logs'" :key="activeSection" mode="user" :initial-tab="activeSection" @update:tab="activeSection = $event" />
       <section v-else class="api-section api-docs">
         <header><h1>接口文档</h1><p>使用统一 OpenAI 兼容路径。请在请求头中携带自己的 API Key。</p></header>
         <article>

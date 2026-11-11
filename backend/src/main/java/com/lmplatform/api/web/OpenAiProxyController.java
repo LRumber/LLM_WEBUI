@@ -9,6 +9,7 @@ import com.lmplatform.api.repository.ApiGatewayRepository;
 import com.lmplatform.api.repository.ApiCreditRepository;
 import com.lmplatform.api.service.ApiGatewayException;
 import com.lmplatform.api.service.ApiGatewayService;
+import com.lmplatform.api.service.ApiCallTrace;
 import com.lmplatform.chat.client.AiServiceClient;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -78,6 +79,7 @@ public class OpenAiProxyController {
             @RequestBody JsonNode request,
             HttpServletResponse response
     ) throws IOException {
+        ApiCallTrace.request(request.path("model").asText(""), request.path("stream").asBoolean(false));
         ApiPrincipal principal = service.authenticate(authorization);
         service.ensureQuota(principal);
         String model = request.path("model").asText();
@@ -137,6 +139,7 @@ public class OpenAiProxyController {
             @RequestParam("file") MultipartFile file,
             @RequestParam("model") String model
     ) throws IOException {
+        ApiCallTrace.request(model, false);
         ApiPrincipal principal = service.authenticate(authorization);
         service.ensureQuota(principal);
         service.ensureModelEnabled(model);
@@ -153,15 +156,17 @@ public class OpenAiProxyController {
                 model
         );
         JsonNode payload = objectMapper.readTree(response);
+        boolean failed = capturePayloadError(payload);
         JsonNode audioUsage = payload.path("usage");
         repository.recordUsage(
                 reservation, principal, model, "audio/transcriptions",
                 audioUsage.path("input_tokens").asInt(audioUsage.path("prompt_tokens").asInt(0)),
                 audioUsage.path("output_tokens").asInt(audioUsage.path("completion_tokens").asInt(textTokens(payload.path("text").asText("")))),
-                "completed", null, elapsedMs(started), !audioUsage.isObject()
+                failed ? "failed" : "completed", failed ? "upstream_error" : null, elapsedMs(started), !audioUsage.isObject()
         );
         return ResponseEntity.ok(response);
         } catch (IOException | RuntimeException exception) {
+            ApiCallTrace.failed(exception);
             repository.recordUsage(reservation, principal, model, "audio/transcriptions",
                     0, 0, "failed", "upstream_error", elapsedMs(started), true);
             throw exception;
@@ -173,6 +178,7 @@ public class OpenAiProxyController {
     private ResponseEntity<String> proxyJson(
             String authorization, JsonNode request, String uri, String endpoint
     ) {
+        ApiCallTrace.request(request.path("model").asText(""), false);
         ApiPrincipal principal = service.authenticate(authorization);
         service.ensureQuota(principal);
         String model = request.path("model").asText();
@@ -184,8 +190,11 @@ public class OpenAiProxyController {
         int inputTokens = textTokens(request.toString());
         int outputTokens = 0;
         boolean estimated = true;
+        boolean failed = false;
         try {
-            JsonNode usage = objectMapper.readTree(response).path("usage");
+            JsonNode payload = objectMapper.readTree(response);
+            failed = capturePayloadError(payload);
+            JsonNode usage = payload.path("usage");
             inputTokens = usage.path("prompt_tokens").asInt(usage.path("total_tokens").asInt(inputTokens));
             outputTokens = usage.path("completion_tokens").asInt(0);
             estimated = !usage.isObject() || (!usage.has("prompt_tokens") && !usage.has("total_tokens"));
@@ -194,10 +203,11 @@ public class OpenAiProxyController {
         }
         repository.recordUsage(
                 reservation, principal, model, endpoint,
-                inputTokens, outputTokens, "completed", null, elapsedMs(started), estimated
+                inputTokens, outputTokens, failed ? "failed" : "completed", failed ? "upstream_error" : null, elapsedMs(started), estimated
         );
         return ResponseEntity.ok(response);
         } catch (RuntimeException exception) {
+            ApiCallTrace.failed(exception);
             repository.recordUsage(reservation, principal, model, endpoint,
                     0, 0, "failed", "upstream_error", elapsedMs(started), true);
             throw exception;
@@ -210,21 +220,25 @@ public class OpenAiProxyController {
         long started = System.nanoTime();
         try {
             String response = aiServiceClient.postJson("/v1/chat/completions", request);
-            JsonNode usage = objectMapper.readTree(response).path("usage");
+            JsonNode payload = objectMapper.readTree(response);
+            boolean failed = capturePayloadError(payload);
+            JsonNode usage = payload.path("usage");
             repository.recordUsage(
                     reservation, principal, model, "chat/completions",
                     usage.path("prompt_tokens").asInt(textTokens(request.toString())),
-                    usage.path("completion_tokens").asInt(textTokens(objectMapper.readTree(response).path("choices").toString())),
-                    "completed", null, elapsedMs(started), !usage.has("prompt_tokens") || !usage.has("completion_tokens")
+                    usage.path("completion_tokens").asInt(textTokens(payload.path("choices").toString())),
+                    failed ? "failed" : "completed", failed ? "upstream_error" : null, elapsedMs(started), !usage.has("prompt_tokens") || !usage.has("completion_tokens")
             );
             return response;
         } catch (IOException exception) {
+            ApiCallTrace.failed(exception);
             repository.recordUsage(
                     reservation, principal, model, "chat/completions",
                     0, 0, "failed", "upstream_error", elapsedMs(started), true
             );
             throw new ApiGatewayException("upstream_error", exception.getMessage(), 502);
         } catch (RuntimeException exception) {
+            ApiCallTrace.failed(exception);
             repository.recordUsage(reservation, principal, model, "chat/completions",
                     0, 0, "failed", "upstream_error", elapsedMs(started), true);
             throw exception;
@@ -239,10 +253,20 @@ public class OpenAiProxyController {
         StringBuilder emittedText = new StringBuilder();
         java.util.concurrent.atomic.AtomicLong renewedAt = new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
         java.util.concurrent.atomic.AtomicBoolean hasUsage = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicBoolean upstreamFailed = new java.util.concurrent.atomic.AtomicBoolean();
         long started = System.nanoTime();
         try {
             aiServiceClient.streamJson("/v1/chat/completions", request, line -> {
                 try {
+                    if (line.startsWith("data:")) {
+                        try {
+                            JsonNode chunk = objectMapper.readTree(line.substring(5).strip());
+                            if (chunk != null && chunk.hasNonNull("error")) {
+                                upstreamFailed.set(true);
+                                ApiCallTrace.failed(new IOException("Upstream error: " + chunk.path("error").toString()));
+                            }
+                        } catch (IOException ignored) { }
+                    }
                     if (System.nanoTime() - renewedAt.get() > java.util.concurrent.TimeUnit.SECONDS.toNanos(30)) {
                         credits.renew(reservation);
                         renewedAt.set(System.nanoTime());
@@ -269,15 +293,18 @@ public class OpenAiProxyController {
             });
             repository.recordUsage(
                     reservation, principal, model, "chat/completions",
-                    promptTokens.get(), completionTokens.get(), "completed", null, elapsedMs(started), !hasUsage.get()
+                    promptTokens.get(), completionTokens.get(), upstreamFailed.get() ? "failed" : "completed",
+                    upstreamFailed.get() ? "upstream_error" : null, elapsedMs(started), !hasUsage.get()
             );
         } catch (StreamRelayException exception) {
+            ApiCallTrace.failed(new IOException("client_disconnected"));
             repository.recordUsage(
                     reservation, principal, model, "chat/completions",
                     promptTokens.get(), completionTokens.get(), "failed", "client_disconnected", elapsedMs(started), !hasUsage.get()
             );
             throw exception.ioException();
         } catch (IOException | RuntimeException exception) {
+            ApiCallTrace.failed(exception);
             repository.recordUsage(
                     reservation, principal, model, "chat/completions",
                     promptTokens.get(), completionTokens.get(), "failed", "upstream_error", elapsedMs(started), !hasUsage.get()
@@ -303,6 +330,14 @@ public class OpenAiProxyController {
             }
         } catch (IOException ignored) {
             // Some providers send comments or non-JSON keepalive lines.
+        }
+        return false;
+    }
+
+    private boolean capturePayloadError(JsonNode payload) {
+        if (payload != null && payload.hasNonNull("error")) {
+            ApiCallTrace.failed(new IOException("Upstream error: " + payload.path("error")));
+            return true;
         }
         return false;
     }

@@ -25,6 +25,39 @@ import org.springframework.mock.web.MockHttpServletResponse;
 class OpenAiProxyControllerTest {
 
     @Test
+    void streamingErrorWithHttp200IsRecordedAsFailureAndRelayedUnchanged() throws Exception {
+        var service = mock(ApiGatewayService.class);
+        var repository = mock(ApiGatewayRepository.class);
+        var client = mock(AiServiceClient.class);
+        var credits = mock(ApiCreditRepository.class);
+        var mapper = new ObjectMapper();
+        var controller = new OpenAiProxyController(service, repository, client, mapper, credits);
+        var principal = new ApiPrincipal(UUID.randomUUID(), 7L, "test", 10000, 0, false);
+        var reservation = UUID.randomUUID();
+        when(service.authenticate("Bearer test")).thenReturn(principal);
+        when(credits.reserve(eq(7L), org.mockito.ArgumentMatchers.anyLong())).thenReturn(reservation);
+        doAnswer(invocation -> {
+            java.util.function.Consumer<String> consumer = invocation.getArgument(2);
+            consumer.accept("data: {\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"private prompt\"}}");
+            consumer.accept("data: [DONE]");
+            return null;
+        }).when(client).streamJson(eq("/v1/chat/completions"), any(), any());
+        var trace = com.lmplatform.api.service.ApiCallTrace.begin();
+        try {
+            var response = new MockHttpServletResponse();
+            controller.chat("Bearer test", mapper.readTree("{\"model\":\"test\",\"stream\":true}"), response);
+            assertThat(response.getStatus()).isEqualTo(200);
+            assertThat(response.getContentAsString()).contains("context_length_exceeded", "[DONE]");
+            assertThat(trace.failure.code()).isEqualTo("context_length_exceeded");
+            assertThat(trace.failure.detail()).doesNotContain("private prompt");
+            verify(repository).recordUsage(eq(reservation), eq(principal), eq("test"), eq("chat/completions"),
+                    org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(), eq("failed"),
+                    eq("upstream_error"), org.mockito.ArgumentMatchers.anyInt(), eq(true));
+            verify(credits).release(reservation);
+        } finally { com.lmplatform.api.service.ApiCallTrace.clear(); }
+    }
+
+    @Test
     void forwardsOmittedAndExplicitOutputLimitsWithoutAddingOrChangingThem() throws Exception {
         var service = mock(ApiGatewayService.class);
         var repository = mock(ApiGatewayRepository.class);

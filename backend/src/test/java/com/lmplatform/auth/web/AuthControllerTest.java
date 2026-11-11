@@ -40,6 +40,9 @@ class AuthControllerTest {
     @MockBean
     private LegacyChatImportService legacyChatImportService;
 
+    @MockBean
+    private com.lmplatform.api.repository.ApiCallLogRepository apiCallLogRepository;
+
     /** Verifies the login route supplies the provider-compatible code-flow parameters. */
     @Test
     void loginRedirectsToUnifiedIdentityGateway() throws Exception {

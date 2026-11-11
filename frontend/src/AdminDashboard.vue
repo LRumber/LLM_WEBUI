@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ApiActivityPanel from './ApiActivityPanel.vue'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   Activity,
@@ -1000,6 +1001,8 @@ onUnmounted(() => {
         </div>
         <p v-if="apiManagementError" class="api-admin-notice">{{ apiManagementError }}</p>
 
+        <ApiActivityPanel mode="admin" initial-tab="management">
+        <template #management>
         <div class="api-admin-section">
           <div class="panel-heading slim"><div><h2>开放模型</h2><p>API 中转站可调用模型独立控制，不受前台对话展示开关影响</p></div></div>
           <div class="table-wrap">
@@ -1039,6 +1042,8 @@ onUnmounted(() => {
             </table>
           </div>
         </div>
+        </template>
+        </ApiActivityPanel>
       </section>
 
       <section v-if="adminPage === 'prompts'" class="admin-panel prompt-admin-panel">

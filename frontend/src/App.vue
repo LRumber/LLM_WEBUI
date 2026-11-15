@@ -234,6 +234,7 @@ const conversationId = ref<string | null>(null)
 const isGenerating = ref(false)
 const usage = ref({ prompt: 0, completion: 0, total: 0 })
 const conversationArea = ref<HTMLElement | null>(null)
+const messageList = ref<HTMLElement | null>(null)
 const promptInput = ref<HTMLTextAreaElement | null>(null)
 const copiedMessageIndex = ref<number | null>(null)
 const serviceOnline = ref(false)
@@ -1253,12 +1254,15 @@ const handleConversationScroll = () => {
   const area = conversationArea.value
   if (!area) return
   atLatestReply.value = isChatAtBottom(area)
-  followLatest.value = atLatestReply.value
+  if (atLatestReply.value) followLatest.value = true
 }
 
 const pauseFollowing = () => { followLatest.value = false }
 const handleConversationWheel = (event: WheelEvent) => {
   if (event.deltaY < 0) pauseFollowing()
+}
+const handleConversationKeydown = (event: KeyboardEvent) => {
+  if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) pauseFollowing()
 }
 
 /** Keeps newest content visible only while the reader has not intentionally scrolled upward. */
@@ -1271,6 +1275,15 @@ const scrollToBottom = async (force = false) => {
     handleConversationScroll()
   }
 }
+
+// Rendering Markdown, images and persisted history can resize content after a stream chunk.
+watch([conversationArea, messageList], ([area, list], _previous, onCleanup) => {
+  if (!area || !list || typeof ResizeObserver === 'undefined') return
+  const observer = new ResizeObserver(() => { void scrollToBottom() })
+  observer.observe(area)
+  observer.observe(list)
+  onCleanup(() => observer.disconnect())
+}, { flush: 'post' })
 
 /** Restores live following after the reader explicitly asks to return to the newest output. */
 const jumpToLatest = async () => {
@@ -1660,6 +1673,8 @@ onMounted(async () => {
         @scroll="handleConversationScroll"
         @wheel.passive="handleConversationWheel"
         @touchstart.passive="pauseFollowing"
+        @pointerdown="pauseFollowing"
+        @keydown="handleConversationKeydown"
         @mouseup="handleConversationSelection"
         @click="handleConversationClick"
       >
@@ -1675,7 +1690,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div v-else class="message-list">
+        <div v-else ref="messageList" class="message-list">
           <!-- Assistant Markdown is sanitized; user text is rendered as plain text. -->
           <article
             v-for="(message, index) in messages"
@@ -1791,7 +1806,9 @@ onMounted(async () => {
         >
           <button type="button" @click="quoteSelectedText"><Quote :size="14" />引用提问</button>
         </div>
-        <button v-if="messages.length && !atLatestReply" class="jump-to-latest" type="button" @click="jumpToLatest"><ArrowDown :size="15" />回到最新回复</button>
+        <div v-if="messages.length" class="jump-to-latest-anchor">
+          <button v-if="!atLatestReply" class="jump-to-latest" type="button" @click="jumpToLatest"><ArrowDown :size="15" />回到最新回复</button>
+        </div>
       </div>
 
       <footer class="composer-wrap">

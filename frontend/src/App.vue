@@ -11,6 +11,7 @@ import KnowledgeBasePage from './KnowledgeBasePage.vue'
 import TeamPage from './TeamPage.vue'
 import FeedbackPanel from './FeedbackPanel.vue'
 import { readChatEvents } from './chatStream'
+import { isChatAtBottom } from './chatScroll'
 import { groupConversations, type ConversationSummary } from './conversationHistory'
 import { assessFileCompatibility } from './fileCompatibility'
 import {
@@ -37,7 +38,7 @@ import {
   Pencil,
   Quote,
   Search,
-  Send,
+  ArrowUp,
   Settings,
   ShieldCheck,
   Square,
@@ -264,6 +265,7 @@ const transcribingVoice = ref(false)
 const voiceDurationSeconds = ref(0)
 const thinkingEnabled = ref(false)
 const followLatest = ref(true)
+const atLatestReply = ref(true)
 const expandedUserMessages = ref<Set<string>>(new Set())
 const selectionPopover = ref<{ text: string; x: number; y: number } | null>(null)
 const quotedSelection = ref<{ text: string } | null>(null)
@@ -1250,15 +1252,23 @@ const deleteConversation = async (conversation: ConversationSummary) => {
 const handleConversationScroll = () => {
   const area = conversationArea.value
   if (!area) return
-  followLatest.value = area.scrollHeight - area.scrollTop - area.clientHeight < 80
+  atLatestReply.value = isChatAtBottom(area)
+  followLatest.value = atLatestReply.value
+}
+
+const pauseFollowing = () => { followLatest.value = false }
+const handleConversationWheel = (event: WheelEvent) => {
+  if (event.deltaY < 0) pauseFollowing()
 }
 
 /** Keeps newest content visible only while the reader has not intentionally scrolled upward. */
 const scrollToBottom = async (force = false) => {
-  if (!force && !followLatest.value) return
   await nextTick()
+  if (conversationArea.value) atLatestReply.value = isChatAtBottom(conversationArea.value)
+  if (!force && !followLatest.value) return
   if (conversationArea.value) {
     conversationArea.value.scrollTop = conversationArea.value.scrollHeight
+    handleConversationScroll()
   }
 }
 
@@ -1397,7 +1407,7 @@ const sendPrompt = async (preset?: string) => {
     const current = conversations.value.find((conversation) => conversation.id === conversationId.value)
     if (current && !messages.value[assistantIndex]?.error) await openConversation(current, followLatest.value, false)
     if (isFirstMessage) scheduleTitleRefresh()
-    await scrollToBottom(true)
+    await scrollToBottom()
     await focusComposer()
   }
 }
@@ -1503,8 +1513,9 @@ onMounted(async () => {
         <a class="nav-item" href="/app/knowledge"><Library :size="18" />知识库</a>
         <a class="nav-item" href="/app/team"><Users :size="18" />团队空间</a>
         <a class="nav-item" href="/app/api-platform"><Terminal :size="18" />API 开发平台</a>
-        <FeedbackPanel />
         <a class="nav-item" href="#"><Archive :size="18" />智能应用</a>
+        <hr class="nav-divider" />
+        <FeedbackPanel />
       </nav>
 
       <div class="history-section">
@@ -1647,6 +1658,8 @@ onMounted(async () => {
         class="conversation-area"
         :class="{ 'has-messages': messages.length }"
         @scroll="handleConversationScroll"
+        @wheel.passive="handleConversationWheel"
+        @touchstart.passive="pauseFollowing"
         @mouseup="handleConversationSelection"
         @click="handleConversationClick"
       >
@@ -1778,7 +1791,7 @@ onMounted(async () => {
         >
           <button type="button" @click="quoteSelectedText"><Quote :size="14" />引用提问</button>
         </div>
-        <button v-if="messages.length && !followLatest" class="jump-to-latest" type="button" @click="jumpToLatest"><ArrowDown :size="15" />回到最新回复</button>
+        <button v-if="messages.length && !atLatestReply" class="jump-to-latest" type="button" @click="jumpToLatest"><ArrowDown :size="15" />回到最新回复</button>
       </div>
 
       <footer class="composer-wrap">
@@ -1833,14 +1846,6 @@ onMounted(async () => {
             <div class="input-tools">
               <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
               <button class="icon-button" type="button" title="上传文件或图片" :disabled="uploadingFile" @click="fileInput?.click()"><Paperclip :size="19" /></button>
-              <button
-                class="icon-button voice-button"
-                :class="{ recording: recordingVoice }"
-                type="button"
-                title="语音输入"
-                :disabled="isGenerating || transcribingVoice"
-                @click="startVoiceInput"
-              ><Mic :size="19" /></button>
               <ElDropdown trigger="click" placement="top-start" @command="selectKnowledgeBase">
                 <button class="knowledge-button" :class="{ active: selectedKnowledgeBaseNames }" type="button" :title="selectedKnowledgeBaseNames || '选择知识库'">
                   <Library :size="16" /><span>{{ selectedKnowledgeBaseNames || '知识库' }}</span><LockKeyhole v-if="conversationId" :size="12" /><ChevronDown v-else :size="12" />
@@ -1868,8 +1873,9 @@ onMounted(async () => {
                   </ElDropdownMenu>
                 </template>
               </ElDropdown>
+              <button class="icon-button voice-button" type="button" title="语音输入" :disabled="isGenerating || transcribingVoice" @click="startVoiceInput"><Mic :size="19" /></button>
               <button v-if="isGenerating" class="send-button stop-button" type="button" title="停止生成" @click="stopGeneration"><Square :size="15" /></button>
-              <button v-else class="send-button" type="button" title="发送" :disabled="!prompt.trim() || attachments.some((file) => file.status !== 'ready')" @click="sendPrompt()"><Send :size="18" /></button>
+              <button v-else class="send-button" type="button" title="发送" :disabled="!prompt.trim() || attachments.some((file) => file.status !== 'ready')" @click="sendPrompt()"><ArrowUp :size="18" /></button>
             </div>
           </div>
         </div>

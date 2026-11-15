@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { MessageSquare } from 'lucide-vue-next'
 import { ElButton, ElDialog, ElInput, ElAlert, ElTable, ElTableColumn, ElPagination } from 'element-plus'
 const props = defineProps<{ admin?: boolean }>()
 const open = ref(false)
@@ -45,7 +46,7 @@ onMounted(() => { if (props.admin) void load() })
     <ElPagination v-model:current-page="page" :page-size="20" :total="total" layout="total, prev, pager, next" @current-change="load" />
   </section>
   <template v-else>
-    <button class="nav-item feedback-entry" type="button" @click="open = true; success = ''; error = ''">意见反馈</button>
+    <button class="nav-item feedback-entry" type="button" @click="open = true; success = ''; error = ''"><MessageSquare :size="18" />意见反馈</button>
     <ElDialog v-model="open" title="意见反馈" width="min(560px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="!busy" :show-close="!busy">
       <form @submit.prevent="send">
         <ElInput v-model="content" type="textarea" :rows="6" maxlength="4000" show-word-limit placeholder="请描述遇到的问题或您的建议，请勿填写密码、API Key 等敏感信息。" :disabled="busy" />
@@ -57,7 +58,7 @@ onMounted(() => { if (props.admin) void load() })
   </template>
 </template>
 <style scoped>
-.feedback-entry { width: 100%; cursor: pointer; background: transparent; border: 0; text-align: left; font: inherit; }
+.feedback-entry { width: 100%; cursor: pointer; background: transparent; border: 0; text-align: left; font-family: inherit; font-size: 13px; }
 .feedback-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
 .feedback-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .feedback-admin { min-width: 0; overflow-x: auto; }

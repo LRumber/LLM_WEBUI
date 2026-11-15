@@ -123,11 +123,10 @@ onMounted(load)
     <section class="api-platform-content" :class="{ loading }">
       <section v-if="activeSection === 'usage'" class="api-section">
         <header><h1>用量信息</h1><p>API 调用独立统计，不计入网页对话用量。</p></header>
-        <el-button @click="activeSection = 'requests'">申请额度</el-button>
         <div class="api-metrics">
           <article><span>今日用量</span><strong>{{ formatNumber(summary?.quota.todayTokens ?? 0) }}</strong><small>tokens</small></article>
           <article><span>累计已用</span><strong>{{ formatNumber(summary?.quota.usedTokens ?? 0) }}</strong><small>tokens</small></article>
-          <article><span>剩余额度</span><strong>{{ summary?.quota.unlimited ? '无限制' : formatNumber(summary?.quota.remainingTokens ?? 0) }}</strong><small v-if="!summary?.quota.unlimited">tokens</small></article>
+          <article><div class="api-quota-heading"><span>剩余额度</span><el-button size="small" @click="activeSection = 'requests'">申请额度</el-button></div><strong>{{ summary?.quota.unlimited ? '无限制' : formatNumber(summary?.quota.remainingTokens ?? 0) }}</strong><small v-if="!summary?.quota.unlimited">tokens</small></article>
           <article><span>本月用量</span><strong>{{ formatNumber(summary?.quota.monthTokens ?? 0) }}</strong><small>tokens</small></article>
         </div>
         <p v-if="summary?.quota.reservedTokens">正在处理的请求预占 {{ formatNumber(summary.quota.reservedTokens) }} tokens，结束后按用量结算。</p>

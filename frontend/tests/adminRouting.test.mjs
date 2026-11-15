@@ -10,6 +10,7 @@ test('maps each administration module to an independent URL', () => {
   assert.equal(resolveAdminPage('/admin/prompts'), 'prompts')
   assert.equal(resolveAdminPage('/admin/announcements'), 'announcements')
   assert.equal(resolveAdminPage('/admin/settings'), 'settings')
+  assert.equal(resolveAdminPage('/admin/feedback'), 'feedback')
 })
 
 test('falls back unknown administration paths to overview', () => {

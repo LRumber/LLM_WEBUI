@@ -123,6 +123,7 @@ class ChatServiceTest {
                 eq("先分析"), anyInt(), eq(null)
         );
         verify(repository).appendMessage(conversationId, "system", "Be precise", "completed");
+        verify(repository).updateModel(conversationId, 1L, "deepseek-chat");
         verify(knowledgeBaseService).find(knowledgeBaseId, 1L);
         verify(repository).bindKnowledgeBases(conversationId, 1L, List.of(knowledgeBaseId));
         verify(repository).recordCompletedUsage(

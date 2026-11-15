@@ -96,6 +96,7 @@ public class ChatService {
                 );
             }
         }
+        repository.updateModel(conversationId, userId, request.model());
         UUID userMessageId = repository.appendMessage(
                 conversationId, "user", request.content(), "completed"
         );
@@ -131,6 +132,7 @@ public class ChatService {
             return;
         }
         UUID replacementId = repository.appendMessage(conversationId, "assistant", "", "generating");
+        repository.updateModel(conversationId, userId, model);
         List<KnowledgeSearchResult> citations = retrieveKnowledge(
                 conversationId, userId, repository.latestUserContent(conversationId)
         );
@@ -159,6 +161,7 @@ public class ChatService {
                 "message_id", replacementVersion.messageId(),
                 "version_index", replacementVersion.versionIndex()
         ));
+        repository.updateModel(conversationId, userId, model);
         UUID assistantMessageId = repository.appendVersionedMessage(
                 conversationId, "assistant", "", "generating",
                 replacementVersion.groupId(), replacementVersion.versionIndex()

@@ -9,6 +9,8 @@ import AdminDashboard from './AdminDashboard.vue'
 import ApiPlatformPage from './ApiPlatformPage.vue'
 import KnowledgeBasePage from './KnowledgeBasePage.vue'
 import TeamPage from './TeamPage.vue'
+import FeedbackPanel from './FeedbackPanel.vue'
+import { readChatEvents } from './chatStream'
 import { groupConversations, type ConversationSummary } from './conversationHistory'
 import { assessFileCompatibility } from './fileCompatibility'
 import {
@@ -962,7 +964,7 @@ const scheduleTitleRefresh = () => {
 }
 
 /** Restores an existing conversation and its last reported token usage. */
-const openConversation = async (conversation: ConversationSummary, forceBottom = true) => {
+const openConversation = async (conversation: ConversationSummary, forceBottom = true, restoreModel = true) => {
   if (isGenerating.value) {
     abortController?.abort()
     abortController = null
@@ -976,16 +978,16 @@ const openConversation = async (conversation: ConversationSummary, forceBottom =
   }
   const persisted: PersistedMessage[] = await response.json()
   conversationId.value = conversation.id
-  selectedModel.value = conversation.model
+  if (restoreModel) selectedModel.value = conversation.model
   selectedTemplateId.value = conversation.promptTemplateId ?? ''
   messages.value = persisted
     .filter((message): message is PersistedMessage & { role: Role } =>
-      (Boolean(message.content) || message.status === 'failed' || message.status === 'interrupted') && message.role !== 'system')
+      (Boolean(message.content) || message.role === 'assistant') && message.role !== 'system')
     .map((message) => ({
       id: message.id,
       role: message.role,
       content: message.content || '当前模型暂时不可用，请稍后重试或切换其他模型。',
-      error: message.status === 'failed' || message.status === 'interrupted',
+      error: message.status === 'failed' || message.status === 'interrupted' || !message.content,
       editedAt: message.editedAt,
       versionIndex: message.versionIndex,
       versionCount: message.versionCount,
@@ -1139,7 +1141,7 @@ const sendEditedMessage = async (message: ChatMessage, index: number) => {
     abortController = null
     await loadConversations()
     const current = conversations.value.find((item) => item.id === conversationId.value)
-    if (current) await openConversation(current, followLatest.value)
+    if (current && !messages.value[assistantIndex]?.error) await openConversation(current, followLatest.value, false)
     await scrollToBottom()
   }
 }
@@ -1209,6 +1211,8 @@ const clearQuotedSelection = () => {
 const regenerateMessage = async (message: ChatMessage, index: number) => {
   if (!conversationId.value || !message.id || message.role !== 'assistant' || isGenerating.value) return
   message.content = ''
+  message.error = false
+  message.reasoningContent = ''
   isGenerating.value = true
   abortController = new AbortController()
   try {
@@ -1229,7 +1233,7 @@ const regenerateMessage = async (message: ChatMessage, index: number) => {
     abortController = null
     await loadConversations()
     const current = conversations.value.find((item) => item.id === conversationId.value)
-    if (current) await openConversation(current)
+    if (current && !message.error) await openConversation(current, true, false)
   }
 }
 
@@ -1306,23 +1310,12 @@ const applyStreamEvent = (event: StreamEvent, assistantIndex: number) => {
 
 /** Incrementally decodes SSE blocks from the Fetch response body. */
 const consumeEventStream = async (response: Response, assistantIndex: number) => {
-  if (!response.body) throw new Error('浏览器不支持流式响应')
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const blocks = buffer.split('\n\n')
-    buffer = blocks.pop() ?? ''
-
-    for (const block of blocks) {
-      const dataLine = block.split('\n').find((line) => line.startsWith('data:'))
-      if (!dataLine) continue
-      applyStreamEvent(JSON.parse(dataLine.slice(5).trim()), assistantIndex)
-    }
+  await readChatEvents(response, event => applyStreamEvent(event, assistantIndex))
+  const assistant = messages.value[assistantIndex]
+  if (!assistant.content && !assistant.error) {
+    assistant.statusText = undefined
+    assistant.error = true
+    assistant.content = '未收到模型的有效回复，请重试或切换模型；若持续出现，请提交意见反馈。'
   }
 }
 
@@ -1402,7 +1395,7 @@ const sendPrompt = async (preset?: string) => {
     abortController = null
     await loadConversations()
     const current = conversations.value.find((conversation) => conversation.id === conversationId.value)
-    if (current) await openConversation(current, followLatest.value)
+    if (current && !messages.value[assistantIndex]?.error) await openConversation(current, followLatest.value, false)
     if (isFirstMessage) scheduleTitleRefresh()
     await scrollToBottom(true)
     await focusComposer()
@@ -1510,6 +1503,7 @@ onMounted(async () => {
         <a class="nav-item" href="/app/knowledge"><Library :size="18" />知识库</a>
         <a class="nav-item" href="/app/team"><Users :size="18" />团队空间</a>
         <a class="nav-item" href="/app/api-platform"><Terminal :size="18" />API 开发平台</a>
+        <FeedbackPanel />
         <a class="nav-item" href="#"><Archive :size="18" />智能应用</a>
       </nav>
 

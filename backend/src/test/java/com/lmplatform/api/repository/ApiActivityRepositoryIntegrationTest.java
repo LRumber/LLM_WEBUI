@@ -45,7 +45,8 @@ class ApiActivityRepositoryIntegrationTest {
                 new ClassPathResource("db/migration/V22__api_default_quota.sql"),
                 new ClassPathResource("db/migration/V28__api_unlimited_quota.sql"),
                 new ClassPathResource("db/migration/V29__api_credit_reservations.sql"),
-                new ClassPathResource("db/migration/V30__api_credit_requests_and_call_logs.sql")
+                new ClassPathResource("db/migration/V30__api_credit_requests_and_call_logs.sql"),
+                new ClassPathResource("db/migration/V31__user_feedback.sql")
         ).execute(ds);
         jdbc.update("INSERT INTO app_user(id,display_name,user_number) VALUES (1,'Alice','001'),(2,'Bob','002')");
         credits = new ApiCreditRepository(jdbc);
@@ -63,6 +64,13 @@ class ApiActivityRepositoryIntegrationTest {
 
     UUID submit(long user, String type, long amount) {
         return transaction.execute(s -> requests.submit(user, type, amount, "test reason"));
+    }
+
+    @Test
+    void feedbackMigrationPreservesIdentityAndExistingCredits() {
+        jdbc.update("INSERT INTO user_feedback(id,user_id,content) VALUES (?,?,?)", UUID.randomUUID(), 1L, "test feedback");
+        assertThat(jdbc.queryForObject("SELECT u.user_number FROM user_feedback f JOIN app_user u ON u.id=f.user_id", String.class)).isEqualTo("001");
+        assertThat(gateway.quota(1).remainingTokens()).isEqualTo(10_000_000);
     }
 
     @Test

@@ -26,6 +26,9 @@ import com.lmplatform.auth.web.UserSession;
 /** Owns SQL persistence for conversations, messages, titles, and usage aggregates. */
 @Repository
 public class ConversationRepository {
+    public void updateModel(UUID conversationId, long userId, String model) {
+        jdbc.update("UPDATE conversation SET model_key=? WHERE id=? AND user_id=?", model, conversationId, userId);
+    }
 
     private final JdbcTemplate jdbc;
 

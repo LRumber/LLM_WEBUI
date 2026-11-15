@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import ApiActivityPanel from './ApiActivityPanel.vue'
+import FeedbackPanel from './FeedbackPanel.vue'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   Activity,
@@ -897,6 +898,7 @@ onUnmounted(() => {
         <a :class="{ active: adminPage === 'api' }" href="/admin/api"><Zap :size="18" />API 管理</a>
         <a :class="{ active: adminPage === 'prompts' }" href="/admin/prompts"><MessageSquare :size="18" />提示词模板</a>
         <a :class="{ active: adminPage === 'announcements' }" href="/admin/announcements"><MessageSquare :size="18" />公告管理</a>
+        <a :class="{ active: adminPage === 'feedback' }" href="/admin/feedback"><MessageSquare :size="18" />意见反馈</a>
         <a :class="{ active: adminPage === 'settings' }" href="/admin/settings"><Settings :size="18" />系统设置</a>
       </nav>
       <div class="admin-sidebar-footer">
@@ -1046,7 +1048,8 @@ onUnmounted(() => {
         </ApiActivityPanel>
       </section>
 
-      <section v-if="adminPage === 'prompts'" class="admin-panel prompt-admin-panel">
+        <FeedbackPanel v-if="adminPage === 'feedback'" admin />
+        <section v-if="adminPage === 'prompts'" class="admin-panel prompt-admin-panel">
         <div class="panel-heading"><div><h2>系统提示词模板</h2><p>所有用户可选择，只有后台管理员可以修改</p></div><button class="panel-action" type="button" @click="editSystemTemplate()">新增模板</button></div>
         <div class="prompt-admin-layout">
           <div class="prompt-admin-list">

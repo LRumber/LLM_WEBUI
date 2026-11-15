@@ -20,7 +20,7 @@ const widgets = new Proxy({}, {
         const rows = vue.inject(rowsKey, null)
         if (name === 'ElTable') vue.provide(rowsKey, () => attrs.data ?? [])
         return () => vue.h(name, { ...attrs },
-          name === 'ElDialog' && !attrs['model-value'] ? [] :
+          name === 'ElDialog' && !(attrs.modelValue ?? attrs['model-value']) ? [] :
             name === 'ElTableColumn' && rows
               ? rows().flatMap(row => slots.default?.({ row }) ?? [])
               : [...(slots.default?.() ?? []), ...(slots.label?.() ?? [])])

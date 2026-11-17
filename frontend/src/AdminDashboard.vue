@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import ApiActivityPanel from './ApiActivityPanel.vue'
 import FeedbackPanel from './FeedbackPanel.vue'
+import TeamAdministratorRequests from './TeamAdministratorRequests.vue'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   Activity,
@@ -1238,6 +1239,7 @@ onUnmounted(() => {
         </div>
       </section>
 
+      <TeamAdministratorRequests v-if="adminPage === 'users'" @reviewed="loadUsers" />
       <section v-if="adminPage === 'users'" class="admin-panel user-panel">
         <div class="panel-heading"><div><h2>用户概况</h2><p>所有 OAuth2 影子用户、权限、对话用量与 API 额度</p></div><span>共 {{ formatNumber(userTotal) }} 位用户</span></div>
         <form class="user-search" @submit.prevent="searchUsers">

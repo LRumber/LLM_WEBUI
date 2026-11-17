@@ -26,6 +26,40 @@ const createForm = ref({ name: '', description: '' })
 const memberIdentifier = ref('')
 const memberRole = ref<'admin' | 'member'>('member')
 const errorMessage = ref('')
+const administratorStatus = ref<{ administrator: boolean; latest: { status: string; reviewNote: string | null } | null } | null>(null)
+const applicationOpen = ref(false)
+const applicationReason = ref('')
+const applicationError = ref('')
+const applicationSaving = ref(false)
+
+const loadAdministratorStatus = async () => {
+  const response = await fetch('/api/teams/administrator-request')
+  if (!response.ok) throw new Error('申请状态加载失败，请刷新重试')
+  administratorStatus.value = await response.json()
+}
+
+const submitApplication = async () => {
+  if (applicationSaving.value) return
+  applicationSaving.value = true
+  applicationError.value = ''
+  try {
+    const response = await fetch('/api/teams/administrator-request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: applicationReason.value }),
+    })
+    if (!response.ok) {
+      const detail = await response.json().catch(() => null)
+      throw new Error(detail?.message || '申请提交失败，请重试')
+    }
+    applicationOpen.value = false
+    applicationReason.value = ''
+    await loadAdministratorStatus()
+  } catch (error) {
+    applicationError.value = error instanceof Error ? error.message : '申请提交失败，请重试'
+  } finally {
+    applicationSaving.value = false
+  }
+}
 
 const selected = computed(() => teams.value.find((team) => team.id === selectedId.value) ?? null)
 const canManage = computed(() => selected.value?.memberRole === 'owner' || selected.value?.memberRole === 'admin')
@@ -131,6 +165,7 @@ const createTeamKnowledgeBase = async () => {
 }
 
 onMounted(async () => {
+  void loadAdministratorStatus().catch((error) => { applicationError.value = error.message })
   await loadTeams()
   await loadMembers()
 })
@@ -142,6 +177,15 @@ onMounted(async () => {
       <a href="/app"><ArrowLeft :size="17" />返回对话</a>
       <div class="team-brand"><Users :size="21" /><strong>团队空间</strong></div>
       <button class="team-create-button" type="button" @click="createOpen = true"><Plus :size="16" />创建团队</button>
+      <div class="team-administrator-application">
+        <span v-if="administratorStatus?.administrator">已是团队管理员</span>
+        <span v-else-if="administratorStatus?.latest?.status === 'pending'">团队管理员申请待审批</span>
+        <template v-else-if="administratorStatus">
+          <button type="button" @click="applicationError = ''; applicationOpen = true">申请成为团队管理员</button>
+          <small v-if="administratorStatus.latest?.status === 'rejected'">上次申请未通过：{{ administratorStatus.latest.reviewNote || '未填写审批意见' }}</small>
+        </template>
+        <small v-if="applicationError && !applicationOpen" role="alert">{{ applicationError }}</small>
+      </div>
       <button
         v-for="team in teams"
         :key="team.id"
@@ -189,11 +233,20 @@ onMounted(async () => {
       <div v-else class="team-empty">
         <Users :size="38" />
         <h1>还没有加入团队</h1>
-        <p>如果你已被后台设为团队管理员，可以创建第一个团队。</p>
+        <p>成为团队管理员后，可以创建第一个团队；你也可以在左侧提交申请。</p>
         <button type="button" @click="createOpen = true"><Plus :size="16" />创建团队</button>
         <span v-if="errorMessage">{{ errorMessage }}</span>
       </div>
     </section>
+
+    <div v-if="applicationOpen" class="team-dialog-backdrop" @click.self="!applicationSaving && (applicationOpen = false)">
+      <form class="team-dialog" @submit.prevent="submitApplication">
+        <header><div><h2>申请成为团队管理员</h2><p>审批通过后可创建团队。</p></div><button type="button" :disabled="applicationSaving" @click="applicationOpen = false">×</button></header>
+        <label>申请理由<textarea v-model="applicationReason" required maxlength="1000" rows="4" :disabled="applicationSaving" placeholder="请说明创建团队的用途"></textarea></label>
+        <p v-if="applicationError" role="alert">{{ applicationError }}</p>
+        <footer><button type="button" :disabled="applicationSaving" @click="applicationOpen = false">取消</button><button class="primary" type="submit" :disabled="applicationSaving || !applicationReason.trim()">{{ applicationSaving ? '提交中…' : '提交申请' }}</button></footer>
+      </form>
+    </div>
 
     <div v-if="createOpen" class="team-dialog-backdrop" @click.self="createOpen = false">
       <form class="team-dialog" @submit.prevent="createTeam">

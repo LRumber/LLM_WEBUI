@@ -101,6 +101,9 @@ button:disabled { cursor: not-allowed; }
 .team-sidebar > a { display: inline-flex; align-items: center; gap: 7px; margin: 0 6px 20px; color: #66706b; font-size: 13px; text-decoration: none; }
 .team-brand { display: flex; align-items: center; gap: 9px; padding: 0 8px 18px; color: #204f3f; font-size: 18px; }
 .team-create-button { width: 100%; height: 38px; display: flex; align-items: center; justify-content: center; gap: 7px; margin-bottom: 18px; color: #fff; background: #2e7259; border: 0; border-radius: 9px; }
+.team-administrator-application { display: grid; gap: 8px; margin-bottom: 18px; font-size: 12px; color: #59625e; }
+.team-administrator-application button { padding: 9px; border: 1px solid #d8dfdb; border-radius: 9px; background: #fff; color: #2e7259; }
+.team-administrator-application small { overflow-wrap: anywhere; }
 .team-item { width: 100%; display: flex; align-items: center; gap: 9px; padding: 9px; color: #4c5551; text-align: left; background: transparent; border: 0; border-radius: 9px; }
 .team-item:hover, .team-item.active { color: #245e4a; background: #e2ebe6; }
 .team-item > span { width: 31px; height: 31px; display: grid; place-items: center; color: #2e7259; background: #fff; border-radius: 8px; font-weight: 700; }

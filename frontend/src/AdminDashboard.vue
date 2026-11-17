@@ -17,6 +17,7 @@ import {
 } from 'lucide-vue-next'
 import { ElDatePicker, ElOption, ElSelect } from 'element-plus'
 import { adminPageMeta, resolveAdminPage } from './adminRouting'
+import { groupUsage, sumUsage } from './usageStats'
 
 interface AdminOverview {
   userCount: number
@@ -162,9 +163,26 @@ const cumulativeUsage = ref<UsageTotals[]>([])
 const usageMonth = ref(new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }).slice(0, 7))
 const usageModelScope = ref('month')
 const usageReport = ref<UsageReport | null>(null)
-const usageSources = [{ key: 'chat', label: '网页对话' }, { key: 'api', label: 'API 调用' }]
-const usageFor = (rows: UsageTotals[], source: string): UsageTotals => rows.find((row) => row.source === source)
+const usageMonthLabel = computed(() => {
+  const [year, month] = (usageReport.value?.month || usageMonth.value).split('-')
+  return `${year}年${Number(month)}月`
+})
+const usageSources = [{ key: 'chat', label: '网页对话' }, { key: 'api', label: 'API 调用' }, { key: 'all', label: '合计' }]
+const usageFor = (rows: UsageTotals[], source: string): UsageTotals => source === 'all'
+  ? { source, ...sumUsage(rows.filter(row => row.source === 'chat' || row.source === 'api')) }
+  : rows.find((row) => row.source === source)
   ?? { source, requestCount: 0, inputTokens: 0, outputTokens: 0, failedRequestCount: 0 }
+const monthlyCombined = computed(() => groupUsage(usageReport.value?.months ?? [], row => row.month))
+const modelUsageTotal = computed(() => sumUsage(usageReport.value?.models ?? []))
+const dailyCombined = computed(() => groupUsage([
+  ...dailyUsage.value.map(row => ({ ...row, source: 'chat' })),
+  ...apiDailyUsage.value.map(row => ({ ...row, source: 'api' })),
+], row => row.date))
+const dailyCombinedTotals = computed(() => ({
+  chat: sumUsage(dailyCombined.value.map(row => row.chat)),
+  api: sumUsage(dailyCombined.value.map(row => row.api)),
+  total: sumUsage(dailyCombined.value.map(row => row.total)),
+}))
 const cumulativeRequests = computed(() => cumulativeUsage.value.reduce((sum, row) => sum + row.requestCount, 0))
 const cumulativeTokens = computed(() => cumulativeUsage.value.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0))
 const users = ref<AdminUser[]>([])
@@ -921,8 +939,8 @@ onUnmounted(() => {
       <div v-if="adminPage === 'overview'" class="metric-grid" aria-label="平台指标">
         <article><span class="metric-icon green"><Users :size="20" /></span><div><small>平台用户</small><strong>{{ formatNumber(overview.userCount) }}</strong></div></article>
         <article><span class="metric-icon blue"><MessageSquare :size="20" /></span><div><small>有效会话</small><strong>{{ formatNumber(overview.conversationCount) }}</strong></div></article>
-        <article><span class="metric-icon orange"><Zap :size="20" /></span><div><small>今日请求</small><strong>{{ formatNumber(overview.todayRequestCount) }}</strong></div></article>
-        <article><span class="metric-icon purple"><Activity :size="20" /></span><div><small>今日 Token</small><strong>{{ formatNumber(overview.todayTokenCount) }}</strong></div></article>
+        <article><span class="metric-icon orange"><Zap :size="20" /></span><div><small>今日请求（对话 + API）</small><strong>{{ formatNumber(overview.todayRequestCount + apiOverview.todayRequestCount) }}</strong></div></article>
+        <article><span class="metric-icon purple"><Activity :size="20" /></span><div><small>今日 Token（对话 + API）</small><strong>{{ formatNumber(overview.todayTokenCount + apiOverview.todayTokenCount) }}</strong></div></article>
       </div>
 
       <section v-if="adminPage === 'overview'" class="admin-panel api-overview-panel">
@@ -1173,8 +1191,8 @@ onUnmounted(() => {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>来源</th><th>所选月请求</th><th>所选月输入 Token</th><th>所选月输出 Token</th><th>所选月总 Token</th><th>累计请求</th><th>累计输入 Token</th><th>累计输出 Token</th><th>累计总 Token</th></tr></thead>
-            <tbody><tr v-for="source in usageSources" :key="source.key">
+            <thead><tr><th>来源</th><th>{{ usageMonthLabel }}请求</th><th>{{ usageMonthLabel }}输入 Token</th><th>{{ usageMonthLabel }}输出 Token</th><th>{{ usageMonthLabel }}总 Token</th><th>累计请求</th><th>累计输入 Token</th><th>累计输出 Token</th><th>累计总 Token</th></tr></thead>
+            <tbody><tr v-for="source in usageSources" :key="source.key" :class="{ 'usage-total-row': source.key === 'all' }">
               <td>{{ source.label }}</td>
               <td>{{ formatNumber(usageFor(usageReport?.selectedMonth ?? [], source.key).requestCount) }}</td>
               <td>{{ formatNumber(usageFor(usageReport?.selectedMonth ?? [], source.key).inputTokens) }}</td>
@@ -1187,17 +1205,18 @@ onUnmounted(() => {
             </tr></tbody>
           </table>
         </div>
-        <div class="panel-heading usage-stat-heading"><div><h2>月度明细</h2><p>所选月份及之前 11 个月</p></div></div>
+        <div class="panel-heading usage-stat-heading"><div><h2>月度明细</h2><p>{{ usageMonthLabel }}及之前 11 个月</p></div></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>月份</th><th>来源</th><th>请求次数</th><th>输入 Token</th><th>输出 Token</th><th>总 Token</th></tr></thead>
-          <tbody><tr v-for="row in usageReport?.months ?? []" :key="`${row.month}-${row.source}`">
-            <td>{{ row.month }}</td><td>{{ row.source === 'chat' ? '网页对话' : 'API 调用' }}</td><td>{{ formatNumber(row.requestCount) }}</td>
-            <td>{{ formatNumber(row.inputTokens) }}</td><td>{{ formatNumber(row.outputTokens) }}</td><td>{{ formatNumber(row.inputTokens + row.outputTokens) }}</td>
-          </tr><tr v-if="!usageReport?.months.length"><td colspan="6" class="empty-table">暂无月度用量</td></tr></tbody>
+          <thead><tr><th>月份</th><th>对话请求</th><th>API 请求</th><th>请求合计</th><th>对话 Token</th><th>API Token</th><th>合计输入 Token</th><th>合计输出 Token</th><th>Token 合计</th></tr></thead>
+          <tbody><tr v-for="row in monthlyCombined" :key="row.key">
+            <td>{{ row.key }}</td><td>{{ formatNumber(row.chat.requestCount) }}</td><td>{{ formatNumber(row.api.requestCount) }}</td><td>{{ formatNumber(row.total.requestCount) }}</td>
+            <td>{{ formatNumber(row.chat.inputTokens + row.chat.outputTokens) }}</td><td>{{ formatNumber(row.api.inputTokens + row.api.outputTokens) }}</td>
+            <td>{{ formatNumber(row.total.inputTokens) }}</td><td>{{ formatNumber(row.total.outputTokens) }}</td><td><strong>{{ formatNumber(row.total.inputTokens + row.total.outputTokens) }}</strong></td>
+          </tr><tr v-if="!monthlyCombined.length"><td colspan="9" class="empty-table">暂无月度用量</td></tr></tbody>
         </table></div>
         <div class="panel-heading usage-stat-heading"><div><h2>分模型用量</h2></div>
           <ElSelect v-model="usageModelScope" :disabled="loading" aria-label="分模型统计范围" @change="loadCurrentPage">
-            <ElOption label="所选月份" value="month" /><ElOption label="历史累计" value="all" />
+            <ElOption :label="usageMonthLabel" value="month" /><ElOption label="历史累计" value="all" />
           </ElSelect>
         </div>
         <div class="table-wrap"><table>
@@ -1206,9 +1225,23 @@ onUnmounted(() => {
             <td>{{ row.modelKey }}</td><td>{{ row.source === 'chat' ? '网页对话' : 'API 调用' }}</td><td>{{ formatNumber(row.requestCount) }}</td><td>{{ formatNumber(row.failedRequestCount) }}</td>
             <td>{{ formatNumber(row.inputTokens) }}</td><td>{{ formatNumber(row.outputTokens) }}</td><td>{{ formatNumber(row.inputTokens + row.outputTokens) }}</td>
           </tr><tr v-if="!usageReport?.models.length"><td colspan="7" class="empty-table">暂无模型用量</td></tr></tbody>
+          <tfoot v-if="usageReport?.models.length"><tr class="usage-total-row"><td colspan="2">合计（当前范围）</td><td>{{ formatNumber(modelUsageTotal.requestCount) }}</td><td>{{ formatNumber(modelUsageTotal.failedRequestCount) }}</td><td>{{ formatNumber(modelUsageTotal.inputTokens) }}</td><td>{{ formatNumber(modelUsageTotal.outputTokens) }}</td><td>{{ formatNumber(modelUsageTotal.inputTokens + modelUsageTotal.outputTokens) }}</td></tr></tfoot>
         </table></div>
         <div class="usage-stat-heading"></div>
-        <div class="panel-heading"><div><h2>近 7 天用量</h2><p>对话与 API 独立统计，每日输入与输出 Token 总量</p></div></div>
+        <div class="panel-heading"><div><h2>近 7 天用量</h2><p>每日一行，展示对话、API 及合计用量</p></div></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>日期</th><th>对话请求</th><th>API 请求</th><th>请求合计</th><th>对话 Token</th><th>API Token</th><th>合计输入 Token</th><th>合计输出 Token</th><th>Token 合计</th></tr></thead>
+          <tbody><tr v-for="row in dailyCombined" :key="row.key">
+            <td>{{ row.key }}</td><td>{{ formatNumber(row.chat.requestCount) }}</td><td>{{ formatNumber(row.api.requestCount) }}</td><td>{{ formatNumber(row.total.requestCount) }}</td>
+            <td>{{ formatNumber(row.chat.inputTokens + row.chat.outputTokens) }}</td><td>{{ formatNumber(row.api.inputTokens + row.api.outputTokens) }}</td>
+            <td>{{ formatNumber(row.total.inputTokens) }}</td><td>{{ formatNumber(row.total.outputTokens) }}</td><td><strong>{{ formatNumber(row.total.inputTokens + row.total.outputTokens) }}</strong></td>
+          </tr><tr v-if="!dailyCombined.length"><td colspan="9" class="empty-table">暂无每日用量</td></tr></tbody>
+          <tfoot v-if="dailyCombined.length"><tr class="usage-total-row"><td>近 7 天合计</td>
+            <td>{{ formatNumber(dailyCombinedTotals.chat.requestCount) }}</td><td>{{ formatNumber(dailyCombinedTotals.api.requestCount) }}</td><td>{{ formatNumber(dailyCombinedTotals.total.requestCount) }}</td>
+            <td>{{ formatNumber(dailyCombinedTotals.chat.inputTokens + dailyCombinedTotals.chat.outputTokens) }}</td><td>{{ formatNumber(dailyCombinedTotals.api.inputTokens + dailyCombinedTotals.api.outputTokens) }}</td>
+            <td>{{ formatNumber(dailyCombinedTotals.total.inputTokens) }}</td><td>{{ formatNumber(dailyCombinedTotals.total.outputTokens) }}</td><td>{{ formatNumber(dailyCombinedTotals.total.inputTokens + dailyCombinedTotals.total.outputTokens) }}</td>
+          </tr></tfoot>
+        </table></div>
         <div class="usage-split">
           <article>
             <div class="panel-heading slim"><div><h2>对话用量</h2><p>网页工作台对话请求</p></div></div>
@@ -1318,6 +1351,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.usage-total-row { font-weight: 600; background: #f2f6f4; }
 .usage-stat-heading { margin-top: 28px; }
 .usage-filters { flex-wrap: wrap; gap: 14px; }
 .usage-stat-heading > .el-select { width: 160px; }

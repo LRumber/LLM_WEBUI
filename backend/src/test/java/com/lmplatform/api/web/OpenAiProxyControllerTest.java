@@ -108,12 +108,38 @@ class OpenAiProxyControllerTest {
         var controller = new OpenAiProxyController(service, repository, client, mapper, credits);
         when(service.authenticate("Bearer test")).thenReturn(new ApiPrincipal(UUID.randomUUID(), 7L, "test", 100, 0, false));
         when(credits.reserve(eq(7L), org.mockito.ArgumentMatchers.anyLong()))
-                .thenThrow(new ApiGatewayException("quota_exceeded", "Insufficient balance", 429));
+                .thenThrow(new com.lmplatform.api.service.InsufficientApiCreditException(2048, 100, "粗估"));
         var response = new MockHttpServletResponse();
         var request = mapper.readTree("{\"model\":\"test\",\"stream\":true}");
         assertThatThrownBy(() -> controller.chat("Bearer test", request, response)).isInstanceOf(ApiGatewayException.class);
         assertThat(response.isCommitted()).isFalse();
         org.mockito.Mockito.verifyNoInteractions(client);
+    }
+
+    @Test
+    void tokenizesOnlyAfterCoarseRejectionAndReservesAgainBeforeInference() throws Exception {
+        var service = mock(ApiGatewayService.class);
+        var repository = mock(ApiGatewayRepository.class);
+        var client = mock(AiServiceClient.class);
+        var credits = mock(ApiCreditRepository.class);
+        var mapper = new ObjectMapper();
+        var controller = new OpenAiProxyController(service, repository, client, mapper, credits);
+        var request = mapper.readTree("{\"model\":\"ds4\",\"max_tokens\":256,\"messages\":[{\"role\":\"user\",\"content\":\"" + "测试".repeat(600) + "\"}]}");
+        long coarse = request.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length + 256L;
+        var principal = new ApiPrincipal(UUID.randomUUID(), 7L, "test", 1000, 0, false);
+        when(service.authenticate("Bearer test")).thenReturn(principal);
+        when(credits.reserve(7L, coarse)).thenThrow(new com.lmplatform.api.service.InsufficientApiCreditException(coarse, 1000, "粗估"));
+        when(client.postJson("/internal/chat/token-count", request)).thenReturn("{\"count\":null}", "{\"count\":500}", "{\"count\":500}");
+        UUID accepted = UUID.randomUUID();
+        when(credits.reserve(7L, 756)).thenThrow(new com.lmplatform.api.service.InsufficientApiCreditException(756, 600, "粗估"))
+                .thenReturn(accepted);
+        assertThatThrownBy(() -> controller.chat("Bearer test", request, new MockHttpServletResponse())).hasMessageContaining("上游分词不可用");
+        assertThatThrownBy(() -> controller.chat("Bearer test", request, new MockHttpServletResponse())).hasMessageContaining("756").hasMessageContaining("600");
+        verify(client, org.mockito.Mockito.never()).postJson(eq("/v1/chat/completions"), any());
+        when(client.postJson(eq("/v1/chat/completions"), any())).thenReturn("{\"usage\":{\"prompt_tokens\":501,\"completion_tokens\":20}}");
+        controller.chat("Bearer test", request, new MockHttpServletResponse());
+        verify(repository).recordUsage(eq(accepted), eq(principal), eq("ds4"), eq("chat/completions"), eq(501), eq(20),
+                eq("completed"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.anyInt(), eq(false));
     }
 
     @Test

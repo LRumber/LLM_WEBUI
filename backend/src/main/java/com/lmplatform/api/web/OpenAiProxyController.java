@@ -8,6 +8,7 @@ import com.lmplatform.api.model.ApiPrincipal;
 import com.lmplatform.api.repository.ApiGatewayRepository;
 import com.lmplatform.api.repository.ApiCreditRepository;
 import com.lmplatform.api.service.ApiGatewayException;
+import com.lmplatform.api.service.InsufficientApiCreditException;
 import com.lmplatform.api.service.ApiGatewayService;
 import com.lmplatform.api.service.ApiCallTrace;
 import com.lmplatform.chat.client.AiServiceClient;
@@ -96,7 +97,7 @@ public class OpenAiProxyController {
             ObjectNode options = prepared.withObject("/stream_options");
             options.put("include_usage", true);
         }
-        UUID reservation = credits.reserve(principal.userId(), estimate(request) + output * copies);
+        UUID reservation = reserveChat(principal.userId(), request, output * copies);
         try {
         if (request.path("stream").asBoolean(false)) {
             response.setStatus(HttpServletResponse.SC_OK);
@@ -340,6 +341,31 @@ public class OpenAiProxyController {
             return true;
         }
         return false;
+    }
+
+    private UUID reserveChat(long userId, JsonNode request, long outputBudget) {
+        int coarseInput = estimate(request);
+        try {
+            return credits.reserve(userId, coarseInput + outputBudget);
+        } catch (InsufficientApiCreditException coarse) {
+            if (coarse.available() <= outputBudget) throw coarse;
+            JsonNode result = null;
+            try {
+                String body = aiServiceClient.postJson("/internal/chat/token-count", request);
+                if (body != null) result = objectMapper.readTree(body);
+            } catch (org.springframework.web.client.RestClientException | IOException ignored) {
+                // An unsupported or unavailable tokenizer cannot relax the reservation.
+            }
+            JsonNode count = result == null ? null : result.get("count");
+            if (count == null || !count.isIntegralNumber() || !count.canConvertToInt() || count.intValue() <= 0) {
+                throw new InsufficientApiCreditException(coarse.required(), coarse.available(), "上游分词不可用，按请求字节粗估");
+            }
+            try {
+                return credits.reserve(userId, count.intValue() + outputBudget);
+            } catch (InsufficientApiCreditException exact) {
+                throw new InsufficientApiCreditException(exact.required(), exact.available(), "上游分词加输出预留");
+            }
+        }
     }
 
     private int estimate(JsonNode request) {

@@ -7,6 +7,9 @@ import org.springframework.web.client.RestClientResponseException;
 /** Error descriptions are an allowlist, not excerpts from provider messages that may echo secrets or prompts. */
 public record ApiFailure(String code, String message, Integer upstreamStatus, String detail) {
     public static ApiFailure from(Throwable exception) {
+        if (exception instanceof InsufficientApiCreditException quota) {
+            return new ApiFailure(quota.code(), quota.getMessage(), null, "阶段：API 额度预占；" + quota.getMessage());
+        }
         Throwable cause = exception;
         StringBuilder clues = new StringBuilder();
         Integer status = null;

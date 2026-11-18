@@ -137,6 +137,24 @@ def test_chat_gateway_applies_deepseek_v4_thinking_kwargs():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(('status', 'body', 'expected'), [(200, {'count': 123}, 123), (404, {}, None), (200, {'count': '123'}, None)])
+async def test_native_tokenizer_uses_registered_model_and_preserves_chat_fields(status, body, expected):
+    def handler(request):
+        assert request.url.path == '/proxy/tokenize'
+        payload = json.loads(request.content)
+        assert payload == {'model': 'DeepSeek-V4', 'messages': [{'role': 'user', 'content': 'hello'}],
+                           'chat_template_kwargs': {'thinking': False}}
+        return httpx.Response(status, json=body)
+
+    gateway = ChatGateway(Settings(), transport=httpx.MockTransport(handler))
+    model = ModelEndpoint(key='ds4', display_name='DS4', provider='openai-compatible',
+                          base_url='http://local-chat/proxy/v1', model_name='DeepSeek-V4',
+                          capabilities={ModelCapability.CHAT}, reasoning_mode='deepseek_v4')
+    assert await gateway.count_openai_prompt({'model': 'ds4', 'messages': [{'role': 'user', 'content': 'hello'}],
+                                             'stream': True, 'max_tokens': 256}, model) == expected
+
+
+@pytest.mark.asyncio
 async def test_chat_health_allows_openai_compatible_endpoint_without_api_key():
     """Allow local OpenAI-compatible services that do not require Authorization."""
 

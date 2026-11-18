@@ -1,6 +1,7 @@
 package com.lmplatform.api.repository;
 
 import com.lmplatform.api.service.ApiGatewayException;
+import com.lmplatform.api.service.InsufficientApiCreditException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -35,8 +36,9 @@ public class ApiCreditRepository {
         jdbc.update("DELETE FROM api_credit_reservation WHERE user_id = ? AND expires_at <= CURRENT_TIMESTAMP", userId);
         boolean unlimited = Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT unlimited FROM api_user_quota WHERE user_id = ?", Boolean.class, userId));
-        if (!unlimited && available(userId) < tokens) {
-            throw new ApiGatewayException("quota_exceeded", "Insufficient available API tokens. Please contact your administrator.", 429);
+        if (!unlimited) {
+            long remaining = available(userId);
+            if (remaining < tokens) throw new InsufficientApiCreditException(tokens, remaining, "请求预占估算");
         }
         UUID id = UUID.randomUUID();
         jdbc.update("INSERT INTO api_credit_reservation(request_id, user_id, tokens) VALUES (?, ?, ?)", id, userId, tokens);

@@ -44,6 +44,31 @@ class ChatGateway:
         self._settings = settings
         self._transport = transport
         self._semaphores: dict[str, tuple[int, asyncio.Semaphore]] = {}
+        self._tokenize_slots = asyncio.Semaphore(2)
+
+    async def count_openai_prompt(self, payload: dict, model: ModelEndpoint) -> int | None:
+        """Use the registered upstream's chat tokenizer, never a client-supplied URL."""
+        base_url = str(model.base_url).rstrip('/')
+        if not base_url.endswith('/v1'):
+            return None
+        try:
+            async with asyncio.timeout(8):
+                async with self._tokenize_slots:
+                    upstream = self._openai_payload(payload, model)
+                    fields = (
+                        'model', 'messages', 'tools', 'add_generation_prompt', 'continue_final_message',
+                        'add_special_tokens', 'chat_template', 'chat_template_kwargs',
+                        'media_io_kwargs', 'mm_processor_kwargs', 'response_format',
+                    )
+                    body = {key: upstream[key] for key in fields if key in upstream}
+                    async with httpx.AsyncClient(timeout=7, transport=self._transport) as client:
+                        response = await client.post(base_url[:-3] + '/tokenize', headers=self._headers_for(model), json=body)
+                        response.raise_for_status()
+                    data = response.json()
+                    count = data.get('count') if isinstance(data, dict) else None
+                    return count if type(count) is int and 0 < count <= 2**31 - 1 else None
+        except (TimeoutError, httpx.HTTPError, ValueError, ChatConfigurationError):
+            return None
 
     async def stream(
         self,

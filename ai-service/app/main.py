@@ -156,6 +156,14 @@ def stream_chat(request: ChatRequest) -> StreamingResponse:
     )
 
 
+@app.post("/internal/chat/token-count")
+async def chat_token_count(payload: dict) -> dict:
+    model = registry.get(str(payload.get("model") or ""))
+    if model is None or ModelCapability.CHAT not in model.capabilities:
+        raise HTTPException(status_code=404, detail="Chat model not found")
+    return {"count": await chat_gateway.count_openai_prompt(payload, model)}
+
+
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(request: Request) -> Response:
     """Proxy OpenAI-compatible Chat Completions while preserving client-supplied fields."""

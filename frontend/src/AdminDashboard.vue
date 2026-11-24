@@ -17,7 +17,9 @@ import {
 } from 'lucide-vue-next'
 import { ElDatePicker, ElOption, ElSelect } from 'element-plus'
 import { adminPageMeta, resolveAdminPage } from './adminRouting'
-import { groupUsage, sumUsage } from './usageStats'
+import { groupUsage, sumUsage, monthlyUsage } from './usageStats'
+import UsageBarChart from './UsageBarChart.vue'
+import { modelDisplayName } from './usageChart'
 
 interface AdminOverview {
   userCount: number
@@ -161,7 +163,8 @@ const dailyUsage = ref<DailyUsage[]>([])
 const apiDailyUsage = ref<DailyUsage[]>([])
 const cumulativeUsage = ref<UsageTotals[]>([])
 const usageMonth = ref(new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }).slice(0, 7))
-const usageModelScope = ref('month')
+const usageModelScope = ref('all')
+const usageModelNamesError = ref(false)
 const usageReport = ref<UsageReport | null>(null)
 const usageMonthLabel = computed(() => {
   const [year, month] = (usageReport.value?.month || usageMonth.value).split('-')
@@ -172,8 +175,17 @@ const usageFor = (rows: UsageTotals[], source: string): UsageTotals => source ==
   ? { source, ...sumUsage(rows.filter(row => row.source === 'chat' || row.source === 'api')) }
   : rows.find((row) => row.source === source)
   ?? { source, requestCount: 0, inputTokens: 0, outputTokens: 0, failedRequestCount: 0 }
-const monthlyCombined = computed(() => groupUsage(usageReport.value?.months ?? [], row => row.month))
+const monthlyCombined = computed(() => monthlyUsage(usageReport.value?.months ?? [], usageReport.value?.month || usageMonth.value))
 const modelUsageTotal = computed(() => sumUsage(usageReport.value?.models ?? []))
+const modelCombined = computed(() => groupUsage(usageReport.value?.models ?? [], row => row.modelKey)
+  .sort((a, b) => (b.total.inputTokens + b.total.outputTokens) - (a.total.inputTokens + a.total.outputTokens)))
+const modelUsageLabel = (key: string) => modelDisplayName(key, models.value)
+const usageChartRows = (rows: ReturnType<typeof groupUsage>, metric: 'requests' | 'tokens', model = false) => rows.map(row => ({
+  key: row.key, label: model ? modelUsageLabel(row.key) : row.key,
+  api: metric === 'requests' ? row.api.requestCount : row.api.inputTokens + row.api.outputTokens,
+  chat: metric === 'requests' ? row.chat.requestCount : row.chat.inputTokens + row.chat.outputTokens,
+}))
+
 const dailyCombined = computed(() => groupUsage([
   ...dailyUsage.value.map(row => ({ ...row, source: 'chat' })),
   ...apiDailyUsage.value.map(row => ({ ...row, source: 'api' })),
@@ -347,6 +359,13 @@ const loadCurrentPage = async () => {
       dailyUsage.value = await response.json()
       apiDailyUsage.value = await apiResponse.json()
       usageReport.value = await reportResponse.json()
+      // Statistics remain available even when the model registry is temporarily unavailable.
+      usageModelNamesError.value = false
+      try {
+        const modelResponse = await fetch('/api/admin/models')
+        if (!modelResponse.ok) throw new Error('Model names unavailable')
+        models.value = await modelResponse.json()
+      } catch { usageModelNamesError.value = true }
     } else if (adminPage.value === 'models') {
       await loadModels()
     } else if (adminPage.value === 'api') {
@@ -1205,6 +1224,26 @@ onUnmounted(() => {
             </tr></tbody>
           </table>
         </div>
+        <div class="usage-visual-heading">
+          <div><h2>API 调用与网页对话用量</h2><p>{{ monthlyCombined[0]?.key }} 至 {{ usageReport?.month || usageMonth }} 月度明细</p></div>
+          <div class="usage-legend"><span><i class="api"></i>API 调用</span><span><i class="chat"></i>网页对话</span></div>
+        </div>
+        <div class="usage-comparison-grid">
+          <UsageBarChart title="月度请求次数" :rows="usageChartRows(monthlyCombined, 'requests')" unit="次" :loading="loading" />
+          <UsageBarChart title="月度 Token 总量" :rows="usageChartRows(monthlyCombined, 'tokens')" unit="Token" :loading="loading" />
+        </div>
+        <div class="panel-heading usage-stat-heading"><div><h2>分模型用量</h2></div>
+          <ElSelect v-model="usageModelScope" :disabled="loading" aria-label="分模型统计范围" @change="loadCurrentPage">
+            <ElOption :label="usageMonthLabel" value="month" /><ElOption label="历史累计" value="all" />
+          </ElSelect>
+        </div>
+        <p v-if="usageModelNamesError" class="usage-name-error">模型显示名称暂不可用，暂以模型标识展示；可刷新重试。</p>
+        <div class="usage-comparison-grid">
+          <UsageBarChart :title="usageModelScope === 'all' ? '各模型累计请求次数' : '各模型月度请求次数'" :rows="usageChartRows(modelCombined, 'requests', true)" unit="次" :loading="loading" />
+          <UsageBarChart :title="usageModelScope === 'all' ? '各模型累计 Token 总量' : '各模型月度 Token 总量'" :rows="usageChartRows(modelCombined, 'tokens', true)" unit="Token" :loading="loading" />
+        </div>
+        <p class="usage-chart-note">纵轴在 0–1 范围内为线性，1 以上为对数刻度。Token 总量 = 输入 + 输出；无记录的来源显示为 0。悬停柱体可查看完整数值。</p>
+        <details class="usage-details"><summary>查看月度与模型明细</summary>
         <div class="panel-heading usage-stat-heading"><div><h2>月度明细</h2><p>{{ usageMonthLabel }}及之前 11 个月</p></div></div>
         <div class="table-wrap"><table>
           <thead><tr><th>月份</th><th>对话请求</th><th>API 请求</th><th>请求合计</th><th>对话 Token</th><th>API Token</th><th>合计输入 Token</th><th>合计输出 Token</th><th>Token 合计</th></tr></thead>
@@ -1214,19 +1253,15 @@ onUnmounted(() => {
             <td>{{ formatNumber(row.total.inputTokens) }}</td><td>{{ formatNumber(row.total.outputTokens) }}</td><td><strong>{{ formatNumber(row.total.inputTokens + row.total.outputTokens) }}</strong></td>
           </tr><tr v-if="!monthlyCombined.length"><td colspan="9" class="empty-table">暂无月度用量</td></tr></tbody>
         </table></div>
-        <div class="panel-heading usage-stat-heading"><div><h2>分模型用量</h2></div>
-          <ElSelect v-model="usageModelScope" :disabled="loading" aria-label="分模型统计范围" @change="loadCurrentPage">
-            <ElOption :label="usageMonthLabel" value="month" /><ElOption label="历史累计" value="all" />
-          </ElSelect>
-        </div>
         <div class="table-wrap"><table>
-          <thead><tr><th>模型标识</th><th>来源</th><th>请求次数</th><th>失败次数</th><th>输入 Token</th><th>输出 Token</th><th>总 Token</th></tr></thead>
+          <thead><tr><th>模型名称</th><th>来源</th><th>请求次数</th><th>失败次数</th><th>输入 Token</th><th>输出 Token</th><th>总 Token</th></tr></thead>
           <tbody><tr v-for="row in usageReport?.models ?? []" :key="`${row.source}-${row.modelKey}`">
-            <td>{{ row.modelKey }}</td><td>{{ row.source === 'chat' ? '网页对话' : 'API 调用' }}</td><td>{{ formatNumber(row.requestCount) }}</td><td>{{ formatNumber(row.failedRequestCount) }}</td>
+            <td>{{ modelUsageLabel(row.modelKey) }}</td><td>{{ row.source === 'chat' ? '网页对话' : 'API 调用' }}</td><td>{{ formatNumber(row.requestCount) }}</td><td>{{ formatNumber(row.failedRequestCount) }}</td>
             <td>{{ formatNumber(row.inputTokens) }}</td><td>{{ formatNumber(row.outputTokens) }}</td><td>{{ formatNumber(row.inputTokens + row.outputTokens) }}</td>
           </tr><tr v-if="!usageReport?.models.length"><td colspan="7" class="empty-table">暂无模型用量</td></tr></tbody>
           <tfoot v-if="usageReport?.models.length"><tr class="usage-total-row"><td colspan="2">合计（当前范围）</td><td>{{ formatNumber(modelUsageTotal.requestCount) }}</td><td>{{ formatNumber(modelUsageTotal.failedRequestCount) }}</td><td>{{ formatNumber(modelUsageTotal.inputTokens) }}</td><td>{{ formatNumber(modelUsageTotal.outputTokens) }}</td><td>{{ formatNumber(modelUsageTotal.inputTokens + modelUsageTotal.outputTokens) }}</td></tr></tfoot>
         </table></div>
+        </details>
         <div class="usage-stat-heading"></div>
         <div class="panel-heading"><div><h2>近 7 天用量</h2><p>每日一行，展示对话、API 及合计用量</p></div></div>
         <div class="table-wrap"><table>
@@ -1242,33 +1277,9 @@ onUnmounted(() => {
             <td>{{ formatNumber(dailyCombinedTotals.total.inputTokens) }}</td><td>{{ formatNumber(dailyCombinedTotals.total.outputTokens) }}</td><td>{{ formatNumber(dailyCombinedTotals.total.inputTokens + dailyCombinedTotals.total.outputTokens) }}</td>
           </tr></tfoot>
         </table></div>
-        <div class="usage-split">
-          <article>
-            <div class="panel-heading slim"><div><h2>对话用量</h2><p>网页工作台对话请求</p></div></div>
-            <div class="usage-chart" :class="{ loading }">
-              <div v-for="day in dailyUsage" :key="day.date" class="usage-column">
-                <div class="bar-area" :title="`${formatNumber(day.inputTokens + day.outputTokens)} Token`">
-                  <div class="usage-bar" :style="{ height: `${Math.max(4, ((day.inputTokens + day.outputTokens) / maxDailyTokens) * 100)}%` }"></div>
-                </div>
-                <strong>{{ formatNumber(day.requestCount) }} 次</strong>
-                <span>{{ formatDate(day.date) }}</span>
-              </div>
-              <p v-if="!dailyUsage.length && !loading" class="empty-chart">暂无对话用量数据</p>
-            </div>
-          </article>
-          <article>
-            <div class="panel-heading slim"><div><h2>API 用量</h2><p>API 中转站每日使用 Token 数</p></div></div>
-            <div class="usage-chart" :class="{ loading }">
-              <div v-for="day in apiDailyUsage" :key="day.date" class="usage-column">
-                <div class="bar-area" :title="`${formatNumber(day.inputTokens + day.outputTokens)} Token`">
-                  <div class="usage-bar api" :style="{ height: `${Math.max(4, ((day.inputTokens + day.outputTokens) / maxApiDailyTokens) * 100)}%` }"></div>
-                </div>
-                <strong>{{ formatNumber(day.inputTokens + day.outputTokens) }} Token</strong>
-                <span>{{ formatDate(day.date) }}</span>
-              </div>
-              <p v-if="!apiDailyUsage.length && !loading" class="empty-chart">暂无 API 用量数据</p>
-            </div>
-          </article>
+        <div class="usage-comparison-grid usage-stat-heading">
+          <UsageBarChart title="近 7 天请求次数" :rows="usageChartRows(dailyCombined, 'requests')" unit="次" :loading="loading" />
+          <UsageBarChart title="近 7 天 Token 总量" :rows="usageChartRows(dailyCombined, 'tokens')" unit="Token" :loading="loading" />
         </div>
       </section>
 
@@ -1351,6 +1362,17 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.usage-visual-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin: 30px 0 20px; }
+.usage-visual-heading h2 { margin: 0; color: #172b49; font-size: 22px; }
+.usage-visual-heading p, .usage-chart-note { color: #64758b; font-size: 12px; line-height: 1.7; }
+.usage-legend { display: flex; flex-wrap: wrap; gap: 24px; color: #35465e; font-size: 13px; }
+.usage-legend span { display: inline-flex; align-items: center; gap: 8px; }
+.usage-legend i { width: 24px; height: 12px; }
+.usage-legend .api { background: #245db8; }.usage-legend .chat { background: #008773; }
+.usage-comparison-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.usage-details { margin-top: 20px; }.usage-details summary { cursor: pointer; color: #386650; font-size: 13px; }
+.usage-name-error { color: #98652f; font-size: 12px; }
+@media (max-width: 1100px) { .usage-comparison-grid { grid-template-columns: 1fr; } }
 .usage-total-row { font-weight: 600; background: #f2f6f4; }
 .usage-stat-heading { margin-top: 28px; }
 .usage-filters { flex-wrap: wrap; gap: 14px; }

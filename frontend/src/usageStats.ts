@@ -24,3 +24,13 @@ export function groupUsage<T extends UsageNumbers & { source: string }>(rows: T[
     api: sumUsage(items.filter(row => row.source === 'api')), total: sumUsage(items),
   }))
 }
+
+export function monthlyUsage<T extends UsageNumbers & { source: string; month: string }>(rows: T[], month: string) {
+  const existing = new Map(groupUsage(rows, row => row.month).map(row => [row.key, row]))
+  const [year, end] = month.split('-').map(Number)
+  return Array.from({ length: 12 }, (_, i) => {
+    const date = new Date(Date.UTC(year!, end! - 12 + i, 1))
+    const key = date.toISOString().slice(0, 7)
+    return existing.get(key) ?? { key, api: sumUsage([]), chat: sumUsage([]), total: sumUsage([]) }
+  })
+}

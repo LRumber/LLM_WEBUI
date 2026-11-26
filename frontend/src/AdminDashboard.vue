@@ -19,6 +19,8 @@ import { ElDatePicker, ElOption, ElSelect } from 'element-plus'
 import { adminPageMeta, resolveAdminPage } from './adminRouting'
 import { groupUsage, sumUsage, monthlyUsage } from './usageStats'
 import UsageBarChart from './UsageBarChart.vue'
+import RuntimePolicyPanel from './RuntimePolicyPanel.vue'
+import RuntimeStatusPanel from './RuntimeStatusPanel.vue'
 import { modelDisplayName } from './usageChart'
 
 interface AdminOverview {
@@ -955,6 +957,7 @@ onUnmounted(() => {
 
       <div v-if="loadError" class="admin-error">暂时无法加载后台数据，请确认核心服务和数据库已启动。</div>
 
+      <RuntimeStatusPanel v-if="adminPage === 'overview'" />
       <div v-if="adminPage === 'overview'" class="metric-grid" aria-label="平台指标">
         <article><span class="metric-icon green"><Users :size="20" /></span><div><small>平台用户</small><strong>{{ formatNumber(overview.userCount) }}</strong></div></article>
         <article><span class="metric-icon blue"><MessageSquare :size="20" /></span><div><small>有效会话</small><strong>{{ formatNumber(overview.conversationCount) }}</strong></div></article>
@@ -1353,10 +1356,7 @@ onUnmounted(() => {
         </form>
       </div>
 
-      <section v-if="adminPage === 'settings'" class="admin-panel settings-panel">
-        <div class="panel-heading"><div><h2>系统设置</h2><p>这里展示运行策略。域名、HTTP/HTTPS 端口由部署文件和反向代理固定管理。</p></div></div>
-        <div class="settings-grid"><article><strong>访问地址</strong><span>由 Docker Compose、nginx 与证书配置决定，部署后不在后台动态修改</span></article><article><strong>认证模式</strong><span>本地管理员 + OAuth2 用户</span></article><article><strong>对象存储</strong><span>MinIO 私有 Bucket</span></article><article><strong>异步任务</strong><span>有界后台执行器</span></article><article><strong>模型默认值</strong><span>Embedding、Reranker、语音识别在模型管理中维护</span></article><article><strong>安全原则</strong><span>密钥不写入浏览器，部署参数不通过页面热修改</span></article></div>
-      </section>
+      <RuntimePolicyPanel v-if="adminPage === 'settings'" />
     </section>
   </main>
 </template>

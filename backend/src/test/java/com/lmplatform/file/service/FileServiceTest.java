@@ -23,6 +23,20 @@ import org.springframework.mock.web.MockMultipartFile;
 class FileServiceTest {
 
     @Test
+    void platformPolicyRejectsUploadBeforeAnyStorageOrProcessing() throws Exception {
+        var storage = mock(ObjectStorageService.class);
+        var repository = mock(FileRepository.class);
+        var processor = mock(FileProcessingService.class);
+        var settings = mock(com.lmplatform.common.service.PlatformSettingsService.class);
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("文件类型不允许"))
+                .when(settings).validateUpload("file.exe", 4);
+        var service = new FileService(new ObjectStorageProperties("", "", "", "files", 1024), storage, repository, processor, settings);
+        assertThatThrownBy(() -> service.upload(9L, new MockMultipartFile("file", "file.exe", "application/octet-stream", new byte[4])))
+                .isInstanceOf(IllegalArgumentException.class);
+        org.mockito.Mockito.verifyNoInteractions(storage, repository, processor);
+    }
+
+    @Test
     void storesAndSchedulesSupportedUpload() throws Exception {
         ObjectStorageService storage = mock(ObjectStorageService.class);
         FileRepository repository = mock(FileRepository.class);
@@ -44,7 +58,7 @@ class FileServiceTest {
                 "file", "guide.md", "text/markdown", "hello!".getBytes()
         );
 
-        FileAsset result = new FileService(properties, storage, repository, processor)
+        FileAsset result = new FileService(properties, storage, repository, processor, mock(com.lmplatform.common.service.PlatformSettingsService.class))
                 .upload(9L, upload);
 
         assertThat(result.id()).isEqualTo(fileId);
@@ -61,7 +75,7 @@ class FileServiceTest {
 
         assertThatThrownBy(() -> new FileService(
                 properties, mock(ObjectStorageService.class), mock(FileRepository.class),
-                mock(FileProcessingService.class)
+                mock(FileProcessingService.class), mock(com.lmplatform.common.service.PlatformSettingsService.class)
         ).upload(9L, upload)).isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -85,7 +99,7 @@ class FileServiceTest {
         when(storage.get("9/private/guide.md", 1024)).thenReturn("hello!".getBytes());
         when(repository.list(9L)).thenReturn(List.of(asset));
 
-        FileAsset result = new FileService(properties, storage, repository, processor).retry(9L, fileId);
+        FileAsset result = new FileService(properties, storage, repository, processor, mock(com.lmplatform.common.service.PlatformSettingsService.class)).retry(9L, fileId);
 
         assertThat(result.id()).isEqualTo(fileId);
         verify(repository).requeue(fileId);
@@ -107,7 +121,7 @@ class FileServiceTest {
         when(storage.get("9/private/guide.md", 1024)).thenReturn("hello!".getBytes());
 
         var result = new FileService(
-                properties, storage, repository, mock(FileProcessingService.class)
+                properties, storage, repository, mock(FileProcessingService.class), mock(com.lmplatform.common.service.PlatformSettingsService.class)
         ).download(9L, fileId);
 
         assertThat(result.filename()).isEqualTo("guide.md");

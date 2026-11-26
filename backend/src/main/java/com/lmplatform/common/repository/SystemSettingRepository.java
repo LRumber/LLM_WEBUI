@@ -79,6 +79,14 @@ public class SystemSettingRepository {
                 .orElse("");
     }
 
+    public String platformSettingsJson() { return setting("platform_settings"); }
+    public String runtimePolicyJson() { return setting("runtime_policy"); }
+    public void saveRuntimePolicyJson(String json) { upsert("runtime_policy", json, "Global runtime policy."); }
+
+    public void savePlatformSettingsJson(String json) {
+        upsert("platform_settings", json, "Platform branding and upload policy.");
+    }
+
     private void upsert(String key, String value, String description) {
         jdbc.update("""
                 INSERT INTO system_setting (setting_key, setting_value, description)

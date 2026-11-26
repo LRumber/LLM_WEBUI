@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElProgress, ElTag } from 'element-plus'
+import { defaultPlatformSettings, loadPlatformSettings, uploadPolicyError } from './platformSettings'
 import { ArrowLeft, BookOpen, FileText, Library, Pencil, Plus, RefreshCw, Trash2, Upload } from 'lucide-vue-next'
+const platformSettings = ref({ ...defaultPlatformSettings })
+onMounted(() => { void loadPlatformSettings().then(settings => { platformSettings.value = settings }).catch(() => {}) })
 
 interface KnowledgeBase {
   id: string
@@ -166,7 +169,10 @@ const uploadDocuments = async (event: Event) => {
   if (!selectedId.value || !input.files?.length) return
   uploading.value = true
   try {
+    platformSettings.value = await loadPlatformSettings()
     for (const file of Array.from(input.files)) {
+      const policyError = uploadPolicyError(file, platformSettings.value)
+      if (policyError) throw new Error(`${file.name}：${policyError}`)
       const body = new FormData()
       body.append('file', file)
       const uploadResponse = await fetch('/api/files', { method: 'POST', body })
@@ -301,7 +307,7 @@ onBeforeUnmount(() => {
 
         <div class="knowledge-toolbar">
           <div><strong>文档</strong><span>{{ documents.length }} 个文件</span></div>
-          <input ref="fileInput" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.markdown" @change="uploadDocuments" />
+          <input ref="fileInput" type="file" multiple :accept="platformSettings.allowedExtensions" @change="uploadDocuments" />
           <button v-if="canManageDocuments(selected)" type="button" :disabled="uploading" @click="fileInput?.click()"><Upload :size="16" />{{ uploading ? '上传中...' : '上传文档' }}</button>
         </div>
 

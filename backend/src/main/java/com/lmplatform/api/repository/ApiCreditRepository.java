@@ -17,7 +17,7 @@ public class ApiCreditRepository {
     public ApiCreditRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
     private void lock(long userId) {
-        jdbc.update("INSERT INTO api_user_quota(user_id, total_token_quota) VALUES (?, 10000000) ON CONFLICT DO NOTHING", userId);
+        jdbc.update("INSERT INTO api_user_quota(user_id) VALUES (?) ON CONFLICT DO NOTHING", userId);
         jdbc.queryForObject("SELECT user_id FROM api_user_quota WHERE user_id = ? FOR UPDATE", Long.class, userId);
     }
 

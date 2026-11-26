@@ -4,6 +4,7 @@ import com.lmplatform.file.config.ObjectStorageProperties;
 import com.lmplatform.file.model.FileAsset;
 import com.lmplatform.file.model.DownloadedFile;
 import com.lmplatform.file.repository.FileRepository;
+import com.lmplatform.common.service.PlatformSettingsService;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
@@ -19,17 +20,20 @@ public class FileService {
     private final ObjectStorageService storage;
     private final FileRepository repository;
     private final FileProcessingService processingService;
+    private final PlatformSettingsService settings;
 
     public FileService(
             ObjectStorageProperties properties,
             ObjectStorageService storage,
             FileRepository repository,
-            FileProcessingService processingService
+            FileProcessingService processingService,
+            PlatformSettingsService settings
     ) {
         this.properties = properties;
         this.storage = storage;
         this.repository = repository;
         this.processingService = processingService;
+        this.settings = settings;
     }
 
     public FileAsset upload(long userId, MultipartFile upload) throws Exception {
@@ -37,6 +41,7 @@ public class FileService {
             throw new IllegalArgumentException("File is empty or exceeds configured size limit");
         }
         String filename = sanitizeFilename(upload.getOriginalFilename());
+        settings.validateUpload(filename, upload.getSize());
         String mediaType = upload.getContentType() == null ? "application/octet-stream" : upload.getContentType();
         byte[] content = upload.getBytes();
         String sha256 = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));

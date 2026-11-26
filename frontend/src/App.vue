@@ -6,6 +6,7 @@ import {
 } from 'element-plus'
 import { marked, type Tokens } from 'marked'
 import AdminDashboard from './AdminDashboard.vue'
+import { defaultPlatformSettings, loadPlatformSettings, uploadPolicyError } from './platformSettings'
 import ApiPlatformPage from './ApiPlatformPage.vue'
 import KnowledgeBasePage from './KnowledgeBasePage.vue'
 import TeamPage from './TeamPage.vue'
@@ -224,6 +225,7 @@ const isAdmin = computed(() => window.location.pathname.startsWith('/admin'))
 const userSessionChecked = ref(!isUserApp.value)
 const currentUser = ref<CurrentUser | null>(null)
 const authOptions = ref<AuthOptions>({ devLoginEnabled: false })
+const platformSettings = ref({ ...defaultPlatformSettings })
 const prompt = ref('')
 const models = ref<ModelInfo[]>([])
 const selectedModel = ref('deepseek-chat')
@@ -789,8 +791,11 @@ const uploadFiles = async (event: Event) => {
   if (!files.length) return
   uploadingFile.value = true
   try {
+    platformSettings.value = await loadPlatformSettings()
     for (const file of files.slice(0, 20 - attachments.value.length)) {
       const compatibility = assessFileCompatibility(file, selectedModelCapabilities.value)
+      const policyError = uploadPolicyError(file, platformSettings.value)
+      if (policyError) { window.alert(`${file.name}：${policyError}`); continue }
       if (!compatibility.supported) {
         window.alert(`${file.name}：${compatibility.reason}`)
         continue
@@ -802,8 +807,13 @@ const uploadFiles = async (event: Event) => {
         const uploaded: UploadedFile = await response.json()
         attachments.value.push(uploaded)
         void waitForFileReady(uploaded.id)
+      } else {
+        const detail = await response.json().catch(() => null)
+        window.alert(detail?.message || `${file.name} 上传失败`)
       }
     }
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : '文件上传失败，请重试')
   } finally {
     uploadingFile.value = false
     input.value = ''
@@ -1129,7 +1139,10 @@ const sendEditedMessage = async (message: ChatMessage, index: number) => {
       body: JSON.stringify({ content, model: selectedModel.value, thinkingEnabled: activeThinkingEnabled.value }),
       signal: abortController.signal,
     })
-    if (!response.ok) throw new Error(`编辑发送失败（${response.status}）`)
+    if (!response.ok) {
+      const detail = await response.json().catch(() => null)
+      throw new Error(detail?.message || `编辑发送失败（${response.status}）`)
+    }
     await consumeEventStream(response, assistantIndex)
   } catch (error) {
     const assistant = messages.value[assistantIndex]
@@ -1226,7 +1239,10 @@ const regenerateMessage = async (message: ChatMessage, index: number) => {
         body: JSON.stringify({ model: selectedModel.value }), signal: abortController.signal,
       },
     )
-    if (!response.ok) throw new Error(`重新生成失败（${response.status}）`)
+    if (!response.ok) {
+      const detail = await response.json().catch(() => null)
+      throw new Error(detail?.message || `重新生成失败（${response.status}）`)
+    }
     await consumeEventStream(response, index)
   } catch (error) {
     message.error = true
@@ -1456,6 +1472,10 @@ const handleComposerKeydown = (event: KeyboardEvent) => {
 // Initial data is loaded only for the workspace route; the login route stays dependency-light.
 onMounted(async () => {
   if (forwardOAuthCallback()) return
+  void loadPlatformSettings().then(settings => {
+    platformSettings.value = settings
+    document.title = settings.platformName
+  }).catch(() => { /* Keep the initial login page available if settings are unavailable. */ })
   try {
     const response = await fetch('/api/auth/options')
     if (response.ok) authOptions.value = await response.json()
@@ -1484,9 +1504,9 @@ onMounted(async () => {
   <main v-else-if="!isUserApp || (userSessionChecked && !currentUser)" class="login-page">
     <section class="login-panel" aria-labelledby="login-title">
       <img class="login-logo" src="/brand/sitp-logo.jpg" alt="SITP" />
-      <p class="product-name">SITP智能AI工作台</p>
+      <p class="product-name">{{ platformSettings.platformName }}</p>
       <h1 id="login-title">统一身份认证</h1>
-      <p class="login-copy">使用组织账号进入对话、知识库与智能应用平台。</p>
+      <p class="login-copy">{{ platformSettings.loginDescription }}</p>
       <button class="primary-button login-button" type="button" @click="login">
         <ShieldCheck :size="18" />
         统一登录
@@ -1500,6 +1520,7 @@ onMounted(async () => {
         </button>
       </div>
       <p class="login-note">账号与权限由统一身份认证中心管理</p>
+      <p v-if="platformSettings.adminContact" class="login-note">联系管理员：{{ platformSettings.adminContact }}</p>
     </section>
   </main>
 
@@ -1511,7 +1532,7 @@ onMounted(async () => {
       <div class="sidebar-header">
         <div class="compact-brand">
           <img class="sidebar-logo" src="/brand/sitp-logo.jpg" alt="SITP" />
-          <span>智能工作台</span>
+          <span>{{ platformSettings.platformName }}</span>
         </div>
         <button class="icon-button mobile-only" title="关闭侧栏" @click="sidebarOpen = false"><PanelLeftClose :size="19" /></button>
       </div>
@@ -1861,7 +1882,7 @@ onMounted(async () => {
           </template>
           <div v-if="!recordingVoice && !transcribingVoice" class="composer-toolbar">
             <div class="input-tools">
-              <input ref="fileInput" class="file-input" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,image/*,audio/*" @change="uploadFiles" />
+              <input ref="fileInput" class="file-input" type="file" multiple :accept="platformSettings.allowedExtensions" @change="uploadFiles" />
               <button class="icon-button" type="button" title="上传文件或图片" :disabled="uploadingFile" @click="fileInput?.click()"><Paperclip :size="19" /></button>
               <ElDropdown trigger="click" placement="top-start" @command="selectKnowledgeBase">
                 <button class="knowledge-button" :class="{ active: selectedKnowledgeBaseNames }" type="button" :title="selectedKnowledgeBaseNames || '选择知识库'">
